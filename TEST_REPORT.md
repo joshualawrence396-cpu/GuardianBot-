@@ -148,6 +148,14 @@ Note: `RiskPercent`-sized V75 entries get **blocked** below min volume
 balances. The two legs together diversify to ~breakeven; the V75 leg
 (PF ~1.10) is still carrying it.
 
+### Gold-only at $110 (~R2000) — money stops $5.50/$5.50
+
+`SESSION_SWEEP`, `XAUUSD.0` M15, `FixedLotGold=0.01`, guardian ±$10/day:
+**193 trades, PF 0.60, −$61.81** (final $48.19; shorts won 51.6%).
+The gold leg alone is negative expectancy — it survived only because the
+deposit could absorb a 56% drawdown. In the combo it was the V75
+pullback leg carrying performance.
+
 ## Strategy B on gold — R1000 (~$55) account, year sim
 
 `XAUUSD.0` M15, `FixedLot=0.01`, `MoneySL_USD=5.5`/`MoneyTP_USD=5.5`
