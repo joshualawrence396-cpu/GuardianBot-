@@ -33,23 +33,23 @@ enum ENUM_STRATEGY_MODE
 //| Inputs                                                           |
 //+------------------------------------------------------------------+
 input group "=== Strategy selector ==="
-input ENUM_STRATEGY_MODE StrategyMode   = TRENDBREAK;      // Which strategies are active
+input ENUM_STRATEGY_MODE StrategyMode   = PULLBACK;        // Which strategies are active
 input string             TrendSymbol    = "";              // Strategy A symbol (empty = chart symbol)
 input string             GoldSymbol     = "XAUUSD";        // Strategy B symbol (broker suffix allowed)
-input ENUM_TIMEFRAMES    TrendTF        = PERIOD_M5;       // Strategy A timeframe
+input ENUM_TIMEFRAMES    TrendTF        = PERIOD_M15;      // Entry timeframe (M15 tested best)
 input ENUM_TIMEFRAMES    GoldTF         = PERIOD_M15;      // Strategy B timeframe
 
 input group "=== Profit Guardian (account-wide, deposit currency) ==="
-input double DailyProfitTarget   = 50.0;    // Daily profit target (0 = disabled)
-input double WeeklyProfitTarget  = 200.0;   // Weekly profit target (0 = disabled)
-input double DailyMaxLoss        = 30.0;    // Daily max loss (0 = disabled)
+input double DailyProfitTarget   = 5.0;     // Daily profit target (0 = disabled)
+input double WeeklyProfitTarget  = 15.0;    // Weekly profit target (0 = disabled)
+input double DailyMaxLoss        = 5.0;     // Daily max loss (0 = disabled)
 input bool   GuardAllSymbols     = true;    // Lock enforcement scope: all symbols
 
 input group "=== Strategy A: trendline break ==="
 input int    BuyConfirmCandles   = 2;       // Bullish confirmations after break
 input int    SellConfirmCandles  = 3;       // Bearish confirmations after break
 input bool   AllowBuys           = true;
-input bool   AllowSells          = true;
+input bool   AllowSells          = false;   // V75 longs outperformed shorts in year test
 input bool   UseManualLines      = false;   // Use manually drawn OBJ_TREND lines
 input int    SwingStrength       = 3;       // Fractal strength (bars each side)
 input int    Lookback            = 120;     // Bars to search for swings
@@ -72,7 +72,7 @@ input bool   BreakoutStopMidpoint = false;  // SL at range midpoint instead of f
 input bool   H1StructConfirm     = true;    // Require H1 HH/HL (buys) or LH/LL (sells)
 input bool   PullbackEMA20       = true;    // EMA20 touch on TrendTF counts as pullback
 input bool   PullbackEMA50       = true;    // EMA50 touch on TrendTF also counts as pullback
-input double EntryMinBodyPct     = 0;       // Signal-candle body >= this %% of range (0 = any)
+input double EntryMinBodyPct     = 50;      // Signal-candle body >= this %% of range (0 = any)
 input bool   UseEngulfing        = true;    // Engulfing candle counts as entry trigger
 input bool   UseRSIConfirm       = false;   // RSI(14) must agree: buys >50, sells <50
 input int    RSIPeriod           = 14;      // RSI period on TrendTF
@@ -89,7 +89,7 @@ input double MinPullbackPoints   = 1000;    // Min drop/rise from H1 extreme to 
 input int    SweepLookback       = 60;      // Entry-TF bars for the swept level
 input int    SweepMaxAge         = 8;       // Sweep candle must be within last N bars
 input int    MinorBars           = 5;       // Bars between sweep and now for minor-structure BOS
-input int    MaxConsecLossesDay  = 0;       // Stop after N consecutive losses today (0 = off)
+input int    MaxConsecLossesDay  = 2;       // Stop after N consecutive losses today (0 = off)
 
 input group "=== Strategy B: session sweep (server-time hours) ==="
 input int AsianStartHour  = 0;              // Asian session start (0-23)
@@ -104,9 +104,13 @@ input double RiskReward       = 2.0;        // TP = RiskReward x risk
 input double BreakevenAtR     = 1.0;        // Move SL to entry at this R (0 = off)
 input int    MaxTradesPerDay  = 5;          // Daily EA entry cap (0 = unlimited)
 input int    MaxSpreadPoints  = 0;          // Max spread in points (0 = off)
-input double RiskPercent      = 0.5;        // % equity risked per trade (0 = fixed lot)
-input double FixedLot         = 0.01;       // Lot when RiskPercent = 0
+input double RiskPercent      = 0;          // % equity risked per trade (0 = fixed lot)
+input double FixedLot         = 0.05;       // Lot when RiskPercent = 0 (V75 min is 0.05)
 input double FixedLotGold     = 0;          // Gold-leg lot when RiskPercent = 0 (0 = use FixedLot)
+input double TrailStartR      = 0;          // Trail SL once profit >= this x risk (0 = off)
+input double TrailDistR       = 0.5;        // Trail distance behind price (x risk)
+input bool   PyramidEnabled   = false;      // Allow add-on entry when position is in profit
+input double PyramidMinProfitR= 1.0;        // Min open profit (x initial risk) to pyramid
 input int    TradeStartHour   = 0;          // Trading window start (0-23)
 input int    TradeEndHour     = 24;         // Trading window end (1-24)
 input long   Magic            = 777002;     // EA magic number
@@ -490,6 +494,42 @@ bool ManagedPositionExists(const string sym)
   }
 
 //+------------------------------------------------------------------+
+//| Pyramid gate: existing managed position is profitable enough     |
+//+------------------------------------------------------------------+
+bool PyramidOK(const string sym)
+  {
+   if(!PyramidEnabled) return false;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetString(POSITION_SYMBOL) != sym) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != Magic) continue;
+      double open = PositionGetDouble(POSITION_PRICE_OPEN);
+      double sl   = PositionGetDouble(POSITION_SL);
+      double risk = 0.0;
+      string rn = GVBEName(ticket);
+      if(GlobalVariableCheck(rn)) risk = GlobalVariableGet(rn);
+      else if(sl > 0.0) risk = MathAbs(open - sl);
+      if(risk <= 0.0) return false;
+      double profitDist = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+                          ? SymbolInfoDouble(sym, SYMBOL_BID) - open
+                          : open - SymbolInfoDouble(sym, SYMBOL_ASK);
+      return (profitDist >= PyramidMinProfitR * risk);
+     }
+   return false;
+  }
+
+//+------------------------------------------------------------------+
+//| Entry permission: flat OR profitable enough to pyramid           |
+//+------------------------------------------------------------------+
+bool EntryOKForSymbol(const string sym)
+  {
+   if(!ManagedPositionExists(sym)) return true;
+   return PyramidOK(sym);
+  }
+
+//+------------------------------------------------------------------+
 //| Count today's EA entries. Distinct DEAL_POSITION_ID are counted  |
 //| so partial fills of one position are not double-counted.         |
 //+------------------------------------------------------------------+
@@ -641,8 +681,8 @@ bool TryEnter(const string sym, bool isBuy, double sl, string tag, double tpIn =
       !TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) ||
       !AccountInfoInteger(ACCOUNT_TRADE_ALLOWED))
      { SetBlockReason("trading not allowed (terminal/account)"); return false; }
-   //--- one position per symbol+magic
-   if(ManagedPositionExists(sym))
+   //--- one position per symbol+magic (unless pyramid criteria met)
+   if(!EntryOKForSymbol(sym))
      { SetBlockReason("position already open on " + sym); return false; }
    //--- daily entry cap (shared across both strategies)
    if(MaxTradesPerDay > 0)
@@ -824,7 +864,7 @@ int BEFind(ulong ticket)
 
 void ManageBreakeven()
   {
-   if(BreakevenAtR <= 0.0) return;
+   if(BreakevenAtR <= 0.0 && TrailStartR <= 0.0) return;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
      {
       ulong ticket = PositionGetTicket(i);
@@ -861,7 +901,7 @@ void ManageBreakeven()
                g_be[idx].done = true;   // no SL -> cannot derive risk
            }
         }
-      if(g_be[idx].done || g_be[idx].risk <= 0.0) continue;
+      if(g_be[idx].risk <= 0.0) continue;
 
       long   type = PositionGetInteger(POSITION_TYPE);
       double open = PositionGetDouble(POSITION_PRICE_OPEN);
@@ -870,12 +910,6 @@ void ManageBreakeven()
       double profitDist = (type == POSITION_TYPE_BUY)
                           ? SymbolInfoDouble(sym, SYMBOL_BID) - open
                           : open - SymbolInfoDouble(sym, SYMBOL_ASK);
-      if(profitDist < BreakevenAtR * g_be[idx].risk) continue;
-
-      // never increase risk: SL moves only toward/past entry
-      bool improves = (type == POSITION_TYPE_BUY) ? (open > sl || sl == 0.0)
-                                                  : (open < sl || sl == 0.0);
-      if(!improves) { g_be[idx].done = true; continue; }
 
       double pt = SymPoint(sym);
       long stopsLvl  = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL);
@@ -884,23 +918,55 @@ void ManageBreakeven()
       double cur = (type == POSITION_TYPE_BUY)
                    ? SymbolInfoDouble(sym, SYMBOL_BID)
                    : SymbolInfoDouble(sym, SYMBOL_ASK);
-      if(MathAbs(cur - open) < minDist)
+
+      //--- breakeven move (once)
+      if(!g_be[idx].done && BreakevenAtR > 0.0 &&
+         profitDist >= BreakevenAtR * g_be[idx].risk)
         {
-         LogT("be_lvl_" + (string)ticket, "Breakeven deferred: inside stops/freeze level.");
-         continue;
+         // never increase risk: SL moves only toward/past entry
+         bool improves = (type == POSITION_TYPE_BUY) ? (open > sl || sl == 0.0)
+                                                     : (open < sl || sl == 0.0);
+         if(!improves) { g_be[idx].done = true; }
+         else if(MathAbs(cur - open) < minDist)
+            LogT("be_lvl_" + (string)ticket, "Breakeven deferred: inside stops/freeze level.");
+         else
+           {
+            trade.SetTypeFillingBySymbol(sym);
+            if(trade.PositionModify(ticket, NormPrice(sym, open), tp))
+              {
+               PrintFormat("Breakeven: ticket=%I64u SL->entry %.*f", ticket, SymDigits(sym), open);
+               g_be[idx].done = true;
+               GlobalVariableSet(GVBEDone(ticket), 1.0);
+              }
+            else
+               LogT("be_fail_" + (string)ticket,
+                    StringFormat("Breakeven modify failed ticket=%I64u rc=%d %s",
+                                 ticket, trade.ResultRetcode(),
+                                 trade.ResultRetcodeDescription()));
+           }
         }
-      trade.SetTypeFillingBySymbol(sym);
-      if(trade.PositionModify(ticket, NormPrice(sym, open), tp))
+
+      //--- trailing stop (ratchets, never loosens)
+      if(TrailStartR > 0.0 && profitDist >= TrailStartR * g_be[idx].risk)
         {
-         PrintFormat("Breakeven: ticket=%I64u SL->entry %.*f", ticket, SymDigits(sym), open);
-         g_be[idx].done = true;
-         GlobalVariableSet(GVBEDone(ticket), 1.0);
+         double tsl = (type == POSITION_TYPE_BUY)
+                      ? NormPrice(sym, cur - TrailDistR * g_be[idx].risk)
+                      : NormPrice(sym, cur + TrailDistR * g_be[idx].risk);
+         bool better = (type == POSITION_TYPE_BUY) ? (sl == 0.0 || tsl > sl)
+                                                   : (sl == 0.0 || tsl < sl);
+         // keep SL at least minDist away from current price
+         bool farEnough = (type == POSITION_TYPE_BUY) ? (cur - tsl >= minDist)
+                                                      : (tsl - cur >= minDist);
+         if(better && farEnough)
+           {
+            trade.SetTypeFillingBySymbol(sym);
+            if(!trade.PositionModify(ticket, tsl, tp))
+               LogT("tr_fail_" + (string)ticket,
+                    StringFormat("Trailing modify failed ticket=%I64u rc=%d %s",
+                                 ticket, trade.ResultRetcode(),
+                                 trade.ResultRetcodeDescription()));
+           }
         }
-      else
-         LogT("be_fail_" + (string)ticket,
-              StringFormat("Breakeven modify failed ticket=%I64u rc=%d %s",
-                           ticket, trade.ResultRetcode(),
-                           trade.ResultRetcodeDescription()));
      }
   }
 
@@ -1279,7 +1345,7 @@ void StrategyPullback()
 
    //--- BUY: close back in trend direction above the EMA
    if(AllowBuys && up && pbBuy && (engB || (strongB && r[1].close > e20[0])) &&
-      r[1].time != g_lastPbBuyBar && !ManagedPositionExists(g_trendSymbol))
+      r[1].time != g_lastPbBuyBar && EntryOKForSymbol(g_trendSymbol))
      {
       double sl, tp = -1;
       if(riskUSD > 0)
@@ -1301,7 +1367,7 @@ void StrategyPullback()
      }
    //--- SELL: mirror
    if(AllowSells && dn && pbSell && (engS || (strongS && r[1].close < e20[0])) &&
-      r[1].time != g_lastPbSellBar && !ManagedPositionExists(g_trendSymbol))
+      r[1].time != g_lastPbSellBar && EntryOKForSymbol(g_trendSymbol))
      {
       double sl, tp = -1;
       if(riskUSD > 0)
@@ -1323,7 +1389,7 @@ void StrategyPullback()
      }
 
    //--- range-breakout alternative entries
-   if(UseBreakoutEntries && !ManagedPositionExists(g_trendSymbol))
+   if(UseBreakoutEntries && EntryOKForSymbol(g_trendSymbol))
      {
       int rb = MathMin(RangeBars, ArraySize(r) - 2);
       double rh = r[2].high, rl = r[2].low;
