@@ -139,11 +139,11 @@ as **not verified in tester** unless your terminal proves otherwise.
 
 ## Verification status
 
-Built in an environment **without MetaTrader 5 / MetaEditor**, so:
-
-- Compilation: **NOT VERIFIED** (no MetaEditor binary available).
-- Strategy Tester / demo runs: **NOT RUN**.
-- Static review performed: balanced structure verified, MQL5 API usage
-  reviewed, input validation implemented.
+- **Compilation: VERIFIED.** MetaEditor64 build **5.0.0.6274** (installed
+  during this task): `Result: 0 errors, 0 warnings` — see `compile.log`
+  and `GuardianBot.ex5`.
+- Strategy Tester / demo runs: **NOT RUN** — the terminal is a fresh
+  install with no broker account, symbols, or tick history configured.
+- Static review performed in addition to the clean compile.
 
 See `TEST_REPORT.md` for the full checklist and what to run first.

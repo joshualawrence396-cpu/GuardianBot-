@@ -1,12 +1,18 @@
 # GuardianBot — Test Report
 
-**Build environment:** Windows workstation, no MetaTrader 5 terminal and no
-MetaEditor installed (checked `C:\Program Files`, `C:\Program Files (x86)`,
-`%APPDATA%\MetaQuotes` — only an MT5 *data* folder exists; screenshots in
-Downloads are from the Android app, which cannot compile or run EAs).
+**Build environment:** Windows workstation. MetaTrader 5 desktop was
+installed during this task (official `mt5setup.exe` from MetaQuotes) at
+`C:\Program Files\MetaTrader 5`.
 
-**Consequence:** compilation and all runtime tests are marked
-**NOT RUN / NOT VERIFIED**. Nothing below is claimed without evidence.
+**Compile evidence:** MetaEditor64 **build 5.0.0.6274**, CLI compile:
+```
+Result: 0 errors, 0 warnings, 1067 ms elapsed, cpu='X64 Regular'
+```
+Full log: `compile.log`. Output `GuardianBot.ex5` is committed as build
+evidence alongside the source.
+
+**Consequence:** compilation is **VERIFIED**. All runtime/demo/backtest
+items remain **NOT RUN** (no broker account / no history in a fresh terminal).
 
 **Static verification performed:**
 
@@ -22,7 +28,7 @@ Downloads are from the Android app, which cannot compile or run EAs).
 
 | Test | Status | Evidence |
 |---|---|---|
-| Compiles, 0 errors / 0 warnings | **NOT VERIFIED** | No MetaEditor in environment |
+| Compiles, 0 errors / 0 warnings | **PASS** | MetaEditor64 build 5.0.0.6274: `Result: 0 errors, 0 warnings` — `compile.log`, `GuardianBot.ex5` |
 | Invalid inputs rejected at init | NOT RUN | `OnInit` validation implemented: negative risk, `RiskReward<=0`, invalid hour ranges, `Buy/SellConfirmCandles<1`, `Lookback` too small, empty `NewsCurrencies` while filter on |
 | Missing symbol/history → safe block | NOT RUN | `SymbolSelect` failure disables that leg; `CopyRates` shortfall skips the evaluation; entries blocked when P/L unverifiable |
 | 500 ms timer starts / failure handled | NOT RUN | `EventSetMillisecondTimer(500)`; failure logged, `OnTick` path remains |
