@@ -82,6 +82,7 @@ guardian ±$5/day.
 | Variant | Trades | PF | Net | Outcome |
 |---|---|---|---|---|
 | `STRUCTURE` base | **289** | **0.90** | −9.43 | balance to $0.57 |
+| `STRUCTURE` buys-only | 185 | 0.84 | −9.25 | balance to $0.75 |
 
 - Best signal yet by far — 289 trades, expected payoff **−$0.03/trade**
   (essentially breakeven minus costs vs −$0.3–0.7 for A).
