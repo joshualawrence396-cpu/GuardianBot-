@@ -72,6 +72,8 @@ input bool   BreakoutStopMidpoint = false;  // SL at range midpoint instead of f
 input bool   H1StructConfirm     = true;    // Require H1 HH/HL (buys) or LH/LL (sells)
 input bool   PullbackEMA50       = true;    // EMA50 touch on TrendTF also counts as pullback
 input bool   UseEngulfing        = true;    // Engulfing candle counts as entry trigger
+input bool   UseRSIConfirm       = false;   // RSI(14) must agree: buys >50, sells <50
+input int    RSIPeriod           = 14;      // RSI period on TrendTF
 input double MoneySL_USD         = 0;       // Fixed risk per trade in deposit ccy (0 = structure SL)
 input double MoneyTP_USD         = 0;       // Fixed TP in deposit ccy (0 = RiskReward x SL)
 input double MilestoneStep       = 0;       // Balance milestone step for risk scaling (0 = off)
@@ -138,6 +140,7 @@ int      g_emaHandle    = INVALID_HANDLE;
 int      g_emaH1        = INVALID_HANDLE;   // Strategy C trend filter
 int      g_emaEntry     = INVALID_HANDLE;   // Strategy C pullback EMA
 int      g_ema50T       = INVALID_HANDLE;   // Strategy C EMA50 on TrendTF
+int      g_rsi          = INVALID_HANDLE;   // Strategy C RSI on TrendTF
 
 //--- signal dedupe (per signal candle time)
 datetime g_lastBuyBreakBar  = 0;
@@ -1202,6 +1205,15 @@ void StrategyPullback()
       up = up && sUp; dn = dn && sDn;
       if(!up && !dn) { SetBlockReason("strategy C: no H1 structure confirm"); return; }
      }
+   if(UseRSIConfirm && (up || dn))
+     {
+      double rsi[]; ArraySetAsSeries(rsi, true);
+      if(CopyBuffer(g_rsi, 0, 1, 1, rsi) != 1)
+        { SetBlockReason("strategy C: RSI data unavailable"); return; }
+      up = up && rsi[0] > 50.0;
+      dn = dn && rsi[0] < 50.0;
+      if(!up && !dn) { SetBlockReason("strategy C: RSI not confirming"); return; }
+     }
 
    //--- entry EMA buffer on TrendTF
    int pb = MathMin(PullbackBars, ArraySize(r) - 2);
@@ -1724,7 +1736,10 @@ int OnInit()
       g_emaH1    = iMA(g_trendSymbol, PERIOD_H1, H1EMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
       g_emaEntry = iMA(g_trendSymbol, TrendTF, EntryEMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
       g_ema50T   = iMA(g_trendSymbol, TrendTF, 50, 0, MODE_EMA, PRICE_CLOSE);
-      if(g_emaH1 == INVALID_HANDLE || g_emaEntry == INVALID_HANDLE || g_ema50T == INVALID_HANDLE)
+      if(UseRSIConfirm)
+         g_rsi = iRSI(g_trendSymbol, TrendTF, RSIPeriod, PRICE_CLOSE);
+      if(g_emaH1 == INVALID_HANDLE || g_emaEntry == INVALID_HANDLE || g_ema50T == INVALID_HANDLE ||
+         (UseRSIConfirm && g_rsi == INVALID_HANDLE))
         { Print("INIT: pullback EMA handles failed on " + g_trendSymbol + " - Strategy C disabled."); g_trendActive = false; }
      }
    if(!g_trendActive && !g_goldActive)
@@ -1761,6 +1776,7 @@ void OnDeinit(const int reason)
    if(g_emaH1 != INVALID_HANDLE) IndicatorRelease(g_emaH1);
    if(g_emaEntry != INVALID_HANDLE) IndicatorRelease(g_emaEntry);
    if(g_ema50T != INVALID_HANDLE) IndicatorRelease(g_ema50T);
+   if(g_rsi != INVALID_HANDLE) IndicatorRelease(g_rsi);
    Comment("");
    Print("GuardianBot deinit, reason=", reason);
   }

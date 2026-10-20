@@ -156,6 +156,22 @@ The gold leg alone is negative expectancy — it survived only because the
 deposit could absorb a 56% drawdown. In the combo it was the V75
 pullback leg carrying performance.
 
+## Improvement experiments on Strategy C v2 (~$27, V75 M15)
+
+| Variant | Trades | PF | Net | Max DD |
+|---|---|---|---|---|
+| Base (RR2, ±$5 lock, both dirs) | 398 | 1.10 | +$53.90 | 56.6% |
+| RR 1:3 + asymmetric lock ($10/$5) | 54 | 0.63 | −$26.27 | dead |
+| **Buys only** (`AllowSells=0`) | 231 | **1.28** | **+$92.25** | **24.5%** |
+| RSI14 confirm (`UseRSIConfirm`) | 360 | 1.07 | +$39.78 | 58.9% |
+
+**Winner: buys-only.** V75's upward drift in this dataset means the short
+leg donated money back; cutting it raised PF 1.10→1.28 and halved
+drawdown. RR 1:3 collapsed win rate below breakeven; RSI confirm added
+nothing.
+
+New inputs: `UseRSIConfirm`, `RSIPeriod`, `FixedLotGold`.
+
 ## Strategy B on gold — R1000 (~$55) account, year sim
 
 `XAUUSD.0` M15, `FixedLot=0.01`, `MoneySL_USD=5.5`/`MoneyTP_USD=5.5`
