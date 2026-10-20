@@ -139,11 +139,19 @@ as **not verified in tester** unless your terminal proves otherwise.
 
 ## Verification status
 
-- **Compilation: VERIFIED.** MetaEditor64 build **5.0.0.6274** (installed
-  during this task): `Result: 0 errors, 0 warnings` — see `compile.log`
-  and `GuardianBot.ex5`.
-- Strategy Tester / demo runs: **NOT RUN** — the terminal is a fresh
-  install with no broker account, symbols, or tick history configured.
-- Static review performed in addition to the clean compile.
+- **Compilation: VERIFIED.** MetaEditor64 build **5.0.0.6274**:
+  `Result: 0 errors, 0 warnings` — see `compile.log`, `GuardianBot.ex5`.
+- **Strategy A backtest: RUN.** `Volatility 75 (1s) Index.0` M5,
+  2026.10.01–10.20, 19 trades — report `GuardianBot_V75_M5.htm`.
+- **Strategy B backtest: RUN.** `XAUUSD.0` M15, same window, 13 trades —
+  report `GuardianBot_XAU_M15.htm`.
+- **Guardian: partially verified in tester** — daily profit AND loss locks
+  latched, positions force-closed, locks reset next day.
+- **News gate: fail-closed verified** — calendar empty in tester → all gold
+  entries blocked; not verified against real events.
+- Live-demo items (restart persistence, manual-trade enforcement,
+  weekly lock) remain NOT RUN — see `TEST_REPORT.md`.
 
-See `TEST_REPORT.md` for the full checklist and what to run first.
+**Broker symbol note:** on Deriv **Zero Spread** accounts every symbol
+carries a `.0` suffix, e.g. `Volatility 75 (1s) Index.0`, `XAUUSD.0`.
+Set `TrendSymbol`/`GoldSymbol` to your broker's exact names.
