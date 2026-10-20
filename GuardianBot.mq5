@@ -70,7 +70,9 @@ input int    RangeBars           = 20;      // Consolidation range lookback
 input double MaxRangePoints      = 0;       // Max range width to count as consolidation (0 = off)
 input bool   BreakoutStopMidpoint = false;  // SL at range midpoint instead of far side
 input bool   H1StructConfirm     = true;    // Require H1 HH/HL (buys) or LH/LL (sells)
+input bool   PullbackEMA20       = true;    // EMA20 touch on TrendTF counts as pullback
 input bool   PullbackEMA50       = true;    // EMA50 touch on TrendTF also counts as pullback
+input double EntryMinBodyPct     = 0;       // Signal-candle body >= this %% of range (0 = any)
 input bool   UseEngulfing        = true;    // Engulfing candle counts as entry trigger
 input bool   UseRSIConfirm       = false;   // RSI(14) must agree: buys >50, sells <50
 input int    RSIPeriod           = 14;      // RSI period on TrendTF
@@ -1238,8 +1240,10 @@ void StrategyPullback()
    bool pbBuy = false, pbSell = false;
    for(int s = 1; s <= pb; s++)
      {
-      if(r[s].low  <= e20[s - 1] || (PullbackEMA50 && r[s].low  <= e50t[s - 1])) pbBuy  = true;
-      if(r[s].high >= e20[s - 1] || (PullbackEMA50 && r[s].high >= e50t[s - 1])) pbSell = true;
+      if((PullbackEMA20 && r[s].low  <= e20[s - 1]) ||
+         (PullbackEMA50 && r[s].low  <= e50t[s - 1])) pbBuy  = true;
+      if((PullbackEMA20 && r[s].high >= e20[s - 1]) ||
+         (PullbackEMA50 && r[s].high >= e50t[s - 1])) pbSell = true;
      }
    if(UseSRRetest)
      {
@@ -1264,8 +1268,17 @@ void StrategyPullback()
    bool engS = UseEngulfing && r[1].close < r[1].open &&
                r[2].close > r[2].open && r[1].close < r[2].open;
 
+   //--- signal-candle strength: body >= EntryMinBodyPct% of range
+   double range1 = r[1].high - r[1].low;
+   bool strongB = r[1].close > r[1].open &&
+                  (EntryMinBodyPct <= 0 || range1 <= 0 ||
+                   (r[1].close - r[1].open) >= range1 * EntryMinBodyPct / 100.0);
+   bool strongS = r[1].close < r[1].open &&
+                  (EntryMinBodyPct <= 0 || range1 <= 0 ||
+                   (r[1].open - r[1].close) >= range1 * EntryMinBodyPct / 100.0);
+
    //--- BUY: close back in trend direction above the EMA
-   if(AllowBuys && up && pbBuy && (engB || (r[1].close > r[1].open && r[1].close > e20[0])) &&
+   if(AllowBuys && up && pbBuy && (engB || (strongB && r[1].close > e20[0])) &&
       r[1].time != g_lastPbBuyBar && !ManagedPositionExists(g_trendSymbol))
      {
       double sl, tp = -1;
@@ -1287,7 +1300,7 @@ void StrategyPullback()
         { g_lastPbBuyBar = r[1].time; GlobalVariableSet(g_gvSigPB, (double)g_lastPbBuyBar); }
      }
    //--- SELL: mirror
-   if(AllowSells && dn && pbSell && (engS || (r[1].close < r[1].open && r[1].close < e20[0])) &&
+   if(AllowSells && dn && pbSell && (engS || (strongS && r[1].close < e20[0])) &&
       r[1].time != g_lastPbSellBar && !ManagedPositionExists(g_trendSymbol))
      {
       double sl, tp = -1;

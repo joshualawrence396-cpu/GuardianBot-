@@ -170,7 +170,21 @@ leg donated money back; cutting it raised PF 1.10→1.28 and halved
 drawdown. RR 1:3 collapsed win rate below breakeven; RSI confirm added
 nothing.
 
-New inputs: `UseRSIConfirm`, `RSIPeriod`, `FixedLotGold`.
+Round 2 — stacked on buys-only:
+
+| Variant | Trades | PF | Net | Max DD |
+|---|---|---|---|---|
+| Asymmetric lock ($10/$5) | ~250 | 1.16 | +$64.75 | 40.5% |
+| EMA50-only pullbacks | 231 | 1.28 | +$92.25 | 24.5% (identical — all pullbacks already deep) |
+| **Strong candles ≥50% body** | 220 | **1.40** | **+$120.58** | **17.2%** |
+
+`EntryMinBodyPct=50` (new input) is the best config yet: $27.5 → $147.58,
+Sharpe 5.84, +$0.55/trade. Wider daily targets hurt (asym lock gave back
+edge); tight ±$5 day locks + strong signal candles wins.
+
+**Recommended config:** `PULLBACK`, `AllowSells=0`, `EntryMinBodyPct=50`,
+`FixedLot=0.05`, ±$5/day locks, `MaxConsecLossesDay=2`. Still requires a
+forward demo pass before real money — backtests can overfit.
 
 ## Strategy B on gold — R1000 (~$55) account, year sim
 
