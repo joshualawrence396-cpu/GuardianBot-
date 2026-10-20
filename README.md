@@ -75,6 +75,7 @@ SL with a fixed deposit-currency risk (`MoneyTP_USD` gives a fixed-$ TP,
 else `RiskReward` applies). `MilestoneStep`+`MilestoneRiskUSD` scale the
 risk by equity milestones — e.g. step=10, risk=5 ⇒ $10 bal risks $5,
 $20 risks $10, $30 risks $15. Requires `FixedLot` mode (`RiskPercent=0`).
+Applied to Strategy B and C entry paths.
 
 **Strategy D — structure sweep (`StrategyMode=STRUCTURE`):** for V75.
 H4 swing structure (`H4SwingStrength`) sets direction — HH+HL = buys

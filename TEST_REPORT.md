@@ -94,6 +94,22 @@ guardian ±$5/day.
 A (0.35–0.53 PF) < C (0.78) < D (0.90). Signals improved each iteration
 but no variant reaches PF ≥ 1.0 — do NOT fund R200 as-is.
 
+## Strategy B on gold — R1000 (~$55) account, year sim
+
+`XAUUSD.0` M15, `FixedLot=0.01`, `MoneySL_USD=5.5`/`MoneyTP_USD=5.5`
+(R100 ≈ $5.50), `UseNewsFilterGold=0` (tester has no calendar),
+`MaxConsecLossesDay=2`, guardian ±$5.50/day.
+
+- **4 trades** (all SELL, Jan 2–6): 2 won / 2 lost → net −$5.46,
+  final balance $49.54.
+- **2,115 subsequent entries rejected `retcode=10019`** — margin for
+  0.01 lot XAUUSD at ~$4,200/oz is **~$52**, exceeding the balance.
+  The account "survived" only because it could no longer trade.
+- 23 rejects were weekend market-closed.
+- Conclusion: **~$55 cannot trade 0.01-lot gold on Deriv Zero Spread**
+  — margin alone needs ~$52+/trade. Minimum realistic deposit for this
+  symbol+lot is ~$100+ (≈R1,800) to keep margin headroom.
+
 - PULLBACK is clearly the better signal (PF 0.78 vs 0.35–0.53, 37 trades,
   lived the full year vs weeks) — but still below breakeven.
 - **RR=3 produced identical results**: with ±$2.50/day locks at 0.05 lots,

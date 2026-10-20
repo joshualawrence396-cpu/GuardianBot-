@@ -1146,6 +1146,26 @@ double MoneyRiskUSD()
   }
 
 //+------------------------------------------------------------------+
+//| Money-based SL/TP: returns true and fills sl/tp when enabled     |
+//+------------------------------------------------------------------+
+bool MoneyStops(const string sym, bool isBuy, double &sl, double &tp)
+  {
+   double riskUSD = MoneyRiskUSD();
+   if(riskUSD <= 0 || RiskPercent > 0) return false;
+   double tv = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_VALUE);
+   double ts = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_SIZE);
+   double px = SymbolInfoDouble(sym, isBuy ? SYMBOL_BID : SYMBOL_ASK);
+   if(tv <= 0 || ts <= 0 || px <= 0) return false;
+   double dist = riskUSD * ts / (tv * FixedLot);
+   sl = isBuy ? px - dist : px + dist;
+   tp = -1;
+   if(MoneyTP_USD > 0)
+      tp = isBuy ? px + dist * (MoneyTP_USD / MoneySL_USD)
+                 : px - dist * (MoneyTP_USD / MoneySL_USD);
+   return true;
+  }
+
+//+------------------------------------------------------------------+
 //| STRATEGY C - H1 trend filter + TrendTF pullback entry            |
 //+------------------------------------------------------------------+
 void StrategyPullback()
@@ -1528,8 +1548,10 @@ void StrategyB()
    if(doSell)
      {
       sl = sig.high + SLBufferPoints * pt;
+      double tps = -1, msl = sl, mtp = -1;
+      if(MoneyStops(g_goldSymbol, false, msl, mtp)) { sl = msl; tps = mtp; }
       PrintFormat("Strategy B SELL setup: swept %s by %.1f pt", namesHi[bestIdx], bestSweep / pt);
-      if(TryEnter(g_goldSymbol, false, sl, "GB_B_SELL"))
+      if(TryEnter(g_goldSymbol, false, sl, "GB_B_SELL", tps))
         {
          g_lastSweepBar = sig.time;
          GlobalVariableSet(g_gvSigB, (double)g_lastSweepBar);
@@ -1538,8 +1560,10 @@ void StrategyB()
    else
      {
       sl = sig.low - SLBufferPoints * pt;
+      double tpb = -1, mslb = sl, mtpb = -1;
+      if(MoneyStops(g_goldSymbol, true, mslb, mtpb)) { sl = mslb; tpb = mtpb; }
       PrintFormat("Strategy B BUY setup: swept %s by %.1f pt", namesLo[bestIdxB], bestSweepB / pt);
-      if(TryEnter(g_goldSymbol, true, sl, "GB_B_BUY"))
+      if(TryEnter(g_goldSymbol, true, sl, "GB_B_BUY", tpb))
         {
          g_lastSweepBar = sig.time;
          GlobalVariableSet(g_gvSigB, (double)g_lastSweepBar);
