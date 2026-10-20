@@ -62,13 +62,15 @@ direction of the trend — 0 disables).
 Volatility indices. H1 close vs `H1EMAPeriod` (50) sets allowed direction;
 `ChopFilterPoints` distance from that EMA must be exceeded (anti-chop).
 Entry on `TrendTF` (use M15): price must have tagged `EntryEMAPeriod`
-(20) — or, if `UseSRRetest`, retested a recent `SRLookback` swing level —
-within `PullbackBars`, then the signal candle must close back in trend
-direction. SL = `PullbackSwingBars` extreme ± `SLBufferPoints`; TP from
-`RiskReward`. Optional `UseBreakoutEntries` adds consolidation-range
-breakouts (`RangeBars`, optional `MaxRangePoints` width cap,
-`BreakoutStopMidpoint`). Signal-bar dedupe persisted via Global
-Variables, same as other legs.
+(20) — or `PullbackEMA50`'s TrendTF EMA50, or if `UseSRRetest` retested a
+recent `SRLookback` swing level — within `PullbackBars`, then the signal
+candle must close back in trend direction (or engulf the prior candle if
+`UseEngulfing`). `H1StructConfirm` additionally requires H1 higher-highs/
+higher-lows for buys (mirror for sells). SL = `PullbackSwingBars` extreme
+± `SLBufferPoints`; TP from `RiskReward`. Optional `UseBreakoutEntries`
+adds consolidation-range breakouts (`RangeBars`, optional
+`MaxRangePoints` width cap, `BreakoutStopMidpoint`). Signal-bar dedupe
+persisted via Global Variables, same as other legs.
 
 **Money-based risk (Strategy C):** `MoneySL_USD` replaces the structure
 SL with a fixed deposit-currency risk (`MoneyTP_USD` gives a fixed-$ TP,

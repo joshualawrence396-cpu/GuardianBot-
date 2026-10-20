@@ -103,8 +103,31 @@ Same-size comparison on V75 (deposit ≈$27, FixedLot 0.05, ±$5/day):
 - `MaxConsecLossesDay` implemented and active in this run.
 
 **Final verdict across all strategies on a $10 V75 account:**
-A (0.35–0.53 PF) < C (0.78) < D (0.90). Signals improved each iteration
-but no variant reaches PF ≥ 1.0 — do NOT fund R200 as-is.
+A (0.35–0.53 PF) < C-old (0.78) < D (0.90). At $10 none reach PF ≥ 1.0.
+
+## Strategy C v2 — spec-complete trend-pullback, ~$27 (R500), FULL YEAR
+
+Added per spec: H1 HH/HL structure confirm (`H1StructConfirm`), EMA50
+pullback alternative (`PullbackEMA50`), engulfing-candle trigger
+(`UseEngulfing`), on top of existing EMA20/S-R pullback + swing SL +
+1:2 RR + BE at 1R.
+
+`Volatility 75 (1s) Index.0` M15, `FixedLot=0.05`, ±$5/day,
+`MaxConsecLossesDay=2`, Jan–Oct 2026:
+
+| Metric | Value |
+|---|---|
+| Trades | **398** (213 long @ 41.8%W / 185 short @ 32.4%W) |
+| **Profit factor** | **1.10** ← first PF ≥ 1.0 config |
+| Expected payoff | +$0.14/trade |
+| Net profit | **+$53.90** (final balance $80.90) |
+| Max balance drawdown | 56.6% |
+| Sharpe | 1.63 |
+
+The account nearly tripled — but note the **59% equity drawdown**: at min
+lot on ~$27 the ride is violent. PF 1.10 is a thin edge; live spread /
+slippage could erase it. **Forward-test on demo (50–100 trades) before
+any real deposit** — per the user's own risk spec.
 
 ## Strategy B on gold — R1000 (~$55) account, year sim
 

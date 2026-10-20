@@ -68,6 +68,9 @@ input bool   UseBreakoutEntries  = false;   // Range-breakout alternative entrie
 input int    RangeBars           = 20;      // Consolidation range lookback
 input double MaxRangePoints      = 0;       // Max range width to count as consolidation (0 = off)
 input bool   BreakoutStopMidpoint = false;  // SL at range midpoint instead of far side
+input bool   H1StructConfirm     = true;    // Require H1 HH/HL (buys) or LH/LL (sells)
+input bool   PullbackEMA50       = true;    // EMA50 touch on TrendTF also counts as pullback
+input bool   UseEngulfing        = true;    // Engulfing candle counts as entry trigger
 input double MoneySL_USD         = 0;       // Fixed risk per trade in deposit ccy (0 = structure SL)
 input double MoneyTP_USD         = 0;       // Fixed TP in deposit ccy (0 = RiskReward x SL)
 input double MilestoneStep       = 0;       // Balance milestone step for risk scaling (0 = off)
@@ -132,6 +135,7 @@ datetime g_lastGoldBar  = 0;
 int      g_emaHandle    = INVALID_HANDLE;
 int      g_emaH1        = INVALID_HANDLE;   // Strategy C trend filter
 int      g_emaEntry     = INVALID_HANDLE;   // Strategy C pullback EMA
+int      g_ema50T       = INVALID_HANDLE;   // Strategy C EMA50 on TrendTF
 
 //--- signal dedupe (per signal candle time)
 datetime g_lastBuyBreakBar  = 0;
@@ -1187,6 +1191,13 @@ void StrategyPullback()
    bool up = h1[0].close > e50[0], dn = h1[0].close < e50[0];
    if(ChopFilterPoints > 0 && MathAbs(h1[0].close - e50[0]) < ChopFilterPoints * pt)
      { SetBlockReason("chop: H1 price hugging EMA50"); up = dn = false; }
+   if(H1StructConfirm && (up || dn))
+     {
+      bool sUp = false, sDn = false;
+      TFStructure(g_trendSymbol, PERIOD_H1, 2, sUp, sDn);
+      up = up && sUp; dn = dn && sDn;
+      if(!up && !dn) { SetBlockReason("strategy C: no H1 structure confirm"); return; }
+     }
 
    //--- entry EMA buffer on TrendTF
    int pb = MathMin(PullbackBars, ArraySize(r) - 2);
@@ -1194,6 +1205,9 @@ void StrategyPullback()
    if(CopyBuffer(g_emaEntry, 0, 1, pb + 1, e20) < pb + 1)
      { SetBlockReason("strategy C: entry EMA data unavailable"); return; }
    // e20[i] = entry EMA at bar shift (i+1)
+   double e50t[]; ArraySetAsSeries(e50t, true);
+   if(PullbackEMA50 && CopyBuffer(g_ema50T, 0, 1, pb + 1, e50t) < pb + 1)
+     { SetBlockReason("strategy C: TrendTF EMA50 data unavailable"); return; }
 
    //--- recent S/R level (broken level retest)
    double srHigh = 0, srLow = 0;
@@ -1208,8 +1222,8 @@ void StrategyPullback()
    bool pbBuy = false, pbSell = false;
    for(int s = 1; s <= pb; s++)
      {
-      if(r[s].low  <= e20[s - 1]) pbBuy  = true;
-      if(r[s].high >= e20[s - 1]) pbSell = true;
+      if(r[s].low  <= e20[s - 1] || (PullbackEMA50 && r[s].low  <= e50t[s - 1])) pbBuy  = true;
+      if(r[s].high >= e20[s - 1] || (PullbackEMA50 && r[s].high >= e50t[s - 1])) pbSell = true;
      }
    if(UseSRRetest)
      {
@@ -1228,8 +1242,14 @@ void StrategyPullback()
         { SetBlockReason("money stop: tick data missing or RiskPercent>0"); return; }
      }
 
+   //--- engulfing candles also qualify as trend-direction triggers
+   bool engB = UseEngulfing && r[1].close > r[1].open &&
+               r[2].close < r[2].open && r[1].close > r[2].open;
+   bool engS = UseEngulfing && r[1].close < r[1].open &&
+               r[2].close > r[2].open && r[1].close < r[2].open;
+
    //--- BUY: close back in trend direction above the EMA
-   if(AllowBuys && up && pbBuy && r[1].close > r[1].open && r[1].close > e20[0] &&
+   if(AllowBuys && up && pbBuy && (engB || (r[1].close > r[1].open && r[1].close > e20[0])) &&
       r[1].time != g_lastPbBuyBar && !ManagedPositionExists(g_trendSymbol))
      {
       double sl, tp = -1;
@@ -1251,7 +1271,7 @@ void StrategyPullback()
         { g_lastPbBuyBar = r[1].time; GlobalVariableSet(g_gvSigPB, (double)g_lastPbBuyBar); }
      }
    //--- SELL: mirror
-   if(AllowSells && dn && pbSell && r[1].close < r[1].open && r[1].close < e20[0] &&
+   if(AllowSells && dn && pbSell && (engS || (r[1].close < r[1].open && r[1].close < e20[0])) &&
       r[1].time != g_lastPbSellBar && !ManagedPositionExists(g_trendSymbol))
      {
       double sl, tp = -1;
@@ -1315,15 +1335,16 @@ void StrategyPullback()
   }
 
 //+------------------------------------------------------------------+
-//| H4 market structure: true if swing direction is up (HH + HL)     |
+//| Swing structure on a given TF: HH+HL => up, LH+LL => dn          |
 //+------------------------------------------------------------------+
-bool H4Direction(const string sym, bool &up, bool &dn)
+bool TFStructure(const string sym, const ENUM_TIMEFRAMES tf, const int strength,
+                 bool &up, bool &dn)
   {
    MqlRates h[];
    ArraySetAsSeries(h, true);
-   int n4 = CopyRates(sym, PERIOD_H4, 0, 200, h);
-   if(n4 < H4SwingStrength * 4 + 6) return false;
-   int st = H4SwingStrength;
+   int n4 = CopyRates(sym, tf, 0, 200, h);
+   if(n4 < strength * 4 + 6) return false;
+   int st = strength;
    double sh1 = 0, sh2 = 0, sl1 = 0, sl2 = 0;
    int foundH = 0, foundL = 0;
    for(int i = st + 1; i < n4 - st && (foundH < 2 || foundL < 2); i++)
@@ -1342,6 +1363,9 @@ bool H4Direction(const string sym, bool &up, bool &dn)
    dn = (sh1 < sh2 && sl1 < sl2);      // lower highs AND lower lows
    return true;
   }
+
+bool H4Direction(const string sym, bool &up, bool &dn)
+  { return TFStructure(sym, PERIOD_H4, H4SwingStrength, up, dn); }
 
 //+------------------------------------------------------------------+
 //| STRATEGY D - H4 bias + H1 zone + entry-TF liquidity sweep + BOS  |
@@ -1691,7 +1715,8 @@ int OnInit()
      {
       g_emaH1    = iMA(g_trendSymbol, PERIOD_H1, H1EMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
       g_emaEntry = iMA(g_trendSymbol, TrendTF, EntryEMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
-      if(g_emaH1 == INVALID_HANDLE || g_emaEntry == INVALID_HANDLE)
+      g_ema50T   = iMA(g_trendSymbol, TrendTF, 50, 0, MODE_EMA, PRICE_CLOSE);
+      if(g_emaH1 == INVALID_HANDLE || g_emaEntry == INVALID_HANDLE || g_ema50T == INVALID_HANDLE)
         { Print("INIT: pullback EMA handles failed on " + g_trendSymbol + " - Strategy C disabled."); g_trendActive = false; }
      }
    if(!g_trendActive && !g_goldActive)
@@ -1727,6 +1752,7 @@ void OnDeinit(const int reason)
    if(g_emaHandle != INVALID_HANDLE) IndicatorRelease(g_emaHandle);
    if(g_emaH1 != INVALID_HANDLE) IndicatorRelease(g_emaH1);
    if(g_emaEntry != INVALID_HANDLE) IndicatorRelease(g_emaEntry);
+   if(g_ema50T != INVALID_HANDLE) IndicatorRelease(g_ema50T);
    Comment("");
    Print("GuardianBot deinit, reason=", reason);
   }
