@@ -52,6 +52,7 @@ input int    SwingStrength       = 3;       // Fractal strength (bars each side)
 input int    Lookback            = 120;     // Bars to search for swings
 input int    MinSwingGap         = 6;       // Min bars between anchors
 input int    CleanBars           = 8;       // Bars before break on original side
+input int    TrendFilterEMA      = 0;       // EMA trend filter on TrendTF (0 = off)
 
 input group "=== Strategy B: session sweep (server-time hours) ==="
 input int AsianStartHour  = 0;              // Asian session start (0-23)
@@ -99,6 +100,7 @@ long     g_login         = 0;
 //--- new-bar tracking
 datetime g_lastTrendBar = 0;
 datetime g_lastGoldBar  = 0;
+int      g_emaHandle    = INVALID_HANDLE;
 
 //--- signal dedupe (per signal candle time)
 datetime g_lastBuyBreakBar  = 0;
@@ -997,8 +999,19 @@ void StrategyA()
    int sMin = MathMax(SwingStrength + 1, 1);               // confirmed swings only
    int sMax = MathMin(Lookback, ArraySize(r) - SwingStrength - 1);
 
+   //--- optional EMA trend filter: trade only with the prevailing trend
+   bool emaBuyOK = true, emaSellOK = true;
+   if(g_emaHandle != INVALID_HANDLE)
+     {
+      double ev[];
+      ArraySetAsSeries(ev, true);
+      if(CopyBuffer(g_emaHandle, 0, 1, 1, ev) == 1)
+        { emaBuyOK = (r[1].close > ev[0]); emaSellOK = (r[1].close < ev[0]); }
+      else { emaBuyOK = emaSellOK = false; }    // fail safe: no filter data, no trades
+     }
+
    //--- BUY
-   if(AllowBuys && !ManagedPositionExists(g_trendSymbol))
+   if(AllowBuys && emaBuyOK && !ManagedPositionExists(g_trendSymbol))
      {
       int k = BuyConfirmCandles + 1;
       int a1, a2; double p1 = 0, p2 = 0;
@@ -1022,7 +1035,7 @@ void StrategyA()
         }
      }
    //--- SELL
-   if(AllowSells && !ManagedPositionExists(g_trendSymbol))
+   if(AllowSells && emaSellOK && !ManagedPositionExists(g_trendSymbol))
      {
       int k = SellConfirmCandles + 1;
       int a1, a2; double p1 = 0, p2 = 0;
@@ -1277,6 +1290,16 @@ int OnInit()
    if(!g_trendActive && !g_goldActive)
      { Print("INIT FAIL: no strategy leg could be enabled."); return INIT_FAILED; }
 
+   //--- optional EMA trend filter for Strategy A
+   if(TrendFilterEMA > 0 && g_trendActive)
+     {
+      g_emaHandle = iMA(g_trendSymbol, TrendTF, TrendFilterEMA, 0, MODE_EMA, PRICE_CLOSE);
+      if(g_emaHandle == INVALID_HANDLE)
+        { Print("INIT: EMA handle failed on " + g_trendSymbol + " - Strategy A disabled."); g_trendActive = false; }
+     }
+   if(!g_trendActive && !g_goldActive)
+     { Print("INIT FAIL: no strategy leg could be enabled."); return INIT_FAILED; }
+
    //--- trade object
    trade.SetExpertMagicNumber(Magic);
    trade.SetDeviationInPoints(DEVIATION_POINTS);
@@ -1304,6 +1327,7 @@ int OnInit()
 void OnDeinit(const int reason)
   {
    EventKillTimer();
+   if(g_emaHandle != INVALID_HANDLE) IndicatorRelease(g_emaHandle);
    Comment("");
    Print("GuardianBot deinit, reason=", reason);
   }

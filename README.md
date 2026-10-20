@@ -55,7 +55,8 @@ short backtest.
 
 `BuyConfirmCandles=2`, `SellConfirmCandles=3`, `AllowBuys`, `AllowSells`,
 `UseManualLines=false`, `SwingStrength=3`, `Lookback=120`, `MinSwingGap=6`,
-`CleanBars=8`.
+`CleanBars=8`, `TrendFilterEMA=0` (EMA on TrendTF; only trades in the
+direction of the trend — 0 disables).
 
 ### Strategy B (broker server-time hours)
 

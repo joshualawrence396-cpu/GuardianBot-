@@ -34,9 +34,30 @@ Short test windows; results say nothing about future profitability.
 - Balance hit **$0.44 by ~2026-02-20** — under 8 weeks.
 - The guardian locked correctly throughout; the failure is position
   sizing: 0.10 lots ≈ $3 risk/trade ≈ 30% of a $10 account.
-- Conclusion: R200 with 0.10 lots is not viable. Minimum viable is
-  `FixedLot` at the symbol's min volume (check `SYMBOL_VOLUME_MIN`,
-  likely 0.001) or a larger deposit.
+
+## Strategy iteration experiment — can a $10/R200 account survive?
+
+`SYMBOL_VOLUME_MIN` on `Volatility 75 (1s) Index.0` is **0.05 lots**
+(~$1/pt/lot ⇒ ~$1.50+ risk per trade = ~15% of a $10 account).
+All runs: same symbol/TF/window, `Deposit=10`, guardian ±$2.50/day.
+
+| Variant | Trades | PF | Net | Outcome |
+|---|---|---|---|---|
+| `FixedLot=0.10` | 14 | 0.53 | −9.56 | dead ~Feb (8 wks) |
+| `FixedLot=0.05` (min) | 19 | 0.44 | −9.72 | **stop-out, 3% of year** |
+| `0.05` + `TrendFilterEMA=200` | 18 | 0.35 | −9.68 | **stop-out, 2% of year** |
+| `0.05`, `AllowSells=false` | 27 | 0.49 | −10.34 | negative balance ~May |
+
+**Verdict: every variant loses the full account.** Profit factor stays
+0.35–0.53 across filters and direction biases — the signal itself has
+negative expectancy on this data, not just a sizing problem. V75 is a
+synthetic random-walk instrument; no edge was found in 2026 YTD data.
+Recommendation: **do not fund a live account with this strategy as-is.**
+The EA mechanics (guardian, sizing validation, fail-safes) all performed
+correctly — the entry signal is the part without demonstrated edge.
+
+The `TrendFilterEMA` input added during this experiment remains in the
+EA (default `0` = off).
 
 ### Live-demo verification (2026.10.20, Deriv-Demo)
 
