@@ -129,6 +129,25 @@ lot on ~$27 the ride is violent. PF 1.10 is a thin edge; live spread /
 slippage could erase it. **Forward-test on demo (50–100 trades) before
 any real deposit** — per the user's own risk spec.
 
+## PULLBACK+GOLD combo — ~$110 (R2000), FULL YEAR
+
+New mode `PULLBACK_GOLD=5`: Strategy C on `Volatility 75 (1s) Index.0`
+M15 (`FixedLot=0.05`) + Strategy B on `XAUUSD.0` M15 (`FixedLotGold=0.01`
+— new per-leg fixed-lot input). Guardian ±$10/day, `MaxConsecLossesDay=2`,
+`UseNewsFilterGold=0` (no calendar in tester).
+
+| Metric | Value |
+|---|---|
+| Trades | 506 (260 long @ 41.5%W / 246 short @ 39.8%W) |
+| Profit factor | 0.99 — breakeven |
+| Net profit | −$7.97 (final $102.03 — **survived full year**) |
+| Max equity drawdown | 87.3% (peaked ~$290 then fell back) |
+
+Note: `RiskPercent`-sized V75 entries get **blocked** below min volume
+0.05 (CalcVolume refuses to bump up) — use `FixedLot` mode at small
+balances. The two legs together diversify to ~breakeven; the V75 leg
+(PF ~1.10) is still carrying it.
+
 ## Strategy B on gold — R1000 (~$55) account, year sim
 
 `XAUUSD.0` M15, `FixedLot=0.01`, `MoneySL_USD=5.5`/`MoneyTP_USD=5.5`

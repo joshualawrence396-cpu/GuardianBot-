@@ -25,7 +25,8 @@ enum ENUM_STRATEGY_MODE
    SESSION_SWEEP = 1,   // Strategy B only
    BOTH          = 2,   // Both strategies from one chart
    PULLBACK      = 3,   // Strategy C: H1 trend + TrendTF pullback (V75)
-   STRUCTURE     = 4    // Strategy D: H4 bias + zone + sweep + BOS (V75)
+   STRUCTURE     = 4,   // Strategy D: H4 bias + zone + sweep + BOS (V75)
+   PULLBACK_GOLD = 5    // Strategy C on trend leg + Strategy B on gold
   };
 
 //+------------------------------------------------------------------+
@@ -101,6 +102,7 @@ input int    MaxTradesPerDay  = 5;          // Daily EA entry cap (0 = unlimited
 input int    MaxSpreadPoints  = 0;          // Max spread in points (0 = off)
 input double RiskPercent      = 0.5;        // % equity risked per trade (0 = fixed lot)
 input double FixedLot         = 0.01;       // Lot when RiskPercent = 0
+input double FixedLotGold     = 0;          // Gold-leg lot when RiskPercent = 0 (0 = use FixedLot)
 input int    TradeStartHour   = 0;          // Trading window start (0-23)
 input int    TradeEndHour     = 24;         // Trading window end (1-24)
 input long   Magic            = 777002;     // EA magic number
@@ -530,7 +532,9 @@ bool CalcVolume(const string sym, double entry, double sl, double &vol)
 
    if(RiskPercent <= 0.0)
      {
-      vol = FloorToStep(FixedLot, vstep, vd);
+      double fl = (g_goldActive && sym == g_goldSymbol && FixedLotGold > 0)
+                  ? FixedLotGold : FixedLot;
+      vol = FloorToStep(fl, vstep, vd);
       if(vol < vmin) { SetBlockReason("FixedLot below volume min"); return false; }
       if(vol > vmax) vol = FloorToStep(vmax, vstep, vd);
       return (vol >= vmin);
@@ -1607,7 +1611,8 @@ void DrawStatus()
    string mode = (StrategyMode == TRENDBREAK) ? "TRENDBREAK" :
                  (StrategyMode == SESSION_SWEEP) ? "SESSION_SWEEP" :
                  (StrategyMode == PULLBACK) ? "PULLBACK" :
-                 (StrategyMode == STRUCTURE) ? "STRUCTURE" : "BOTH";
+                 (StrategyMode == STRUCTURE) ? "STRUCTURE" :
+                 (StrategyMode == PULLBACK_GOLD) ? "PULLBACK+GOLD" : "BOTH";
    Comment(StringFormat(
       "GuardianBot v1.00 | mode=%s\n"
       "Trend: %s %s %s | Gold: %s %s %s\n"
@@ -1689,8 +1694,10 @@ int OnInit()
    g_trendSymbol = (TrendSymbol == "") ? _Symbol : TrendSymbol;
    g_goldSymbol  = GoldSymbol;
    g_trendActive = (StrategyMode == TRENDBREAK || StrategyMode == BOTH ||
-                    StrategyMode == PULLBACK || StrategyMode == STRUCTURE);
-   g_goldActive  = (StrategyMode == SESSION_SWEEP || StrategyMode == BOTH);
+                    StrategyMode == PULLBACK || StrategyMode == STRUCTURE ||
+                    StrategyMode == PULLBACK_GOLD);
+   g_goldActive  = (StrategyMode == SESSION_SWEEP || StrategyMode == BOTH ||
+                    StrategyMode == PULLBACK_GOLD);
 
    if(g_trendActive && !SymbolSelect(g_trendSymbol, true))
      { Print("INIT: trend symbol '" + g_trendSymbol + "' unavailable - trend leg disabled."); g_trendActive = false; }
@@ -1700,7 +1707,8 @@ int OnInit()
      { Print("INIT FAIL: no strategy leg could be enabled."); return INIT_FAILED; }
 
    //--- optional EMA trend filter for Strategy A
-   if(TrendFilterEMA > 0 && g_trendActive && StrategyMode != PULLBACK)
+   if(TrendFilterEMA > 0 && g_trendActive &&
+      StrategyMode != PULLBACK && StrategyMode != PULLBACK_GOLD)
      {
       g_emaHandle = iMA(g_trendSymbol, TrendTF, TrendFilterEMA, 0, MODE_EMA, PRICE_CLOSE);
       if(g_emaHandle == INVALID_HANDLE)
@@ -1711,7 +1719,7 @@ int OnInit()
      { Print("INIT FAIL: strategy D parameters too small."); return INIT_PARAMETERS_INCORRECT; }
 
    //--- Strategy C handles
-   if(StrategyMode == PULLBACK && g_trendActive)
+   if((StrategyMode == PULLBACK || StrategyMode == PULLBACK_GOLD) && g_trendActive)
      {
       g_emaH1    = iMA(g_trendSymbol, PERIOD_H1, H1EMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
       g_emaEntry = iMA(g_trendSymbol, TrendTF, EntryEMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
@@ -1775,7 +1783,7 @@ void OnTick()
    Monitor();
    if(g_trendActive && IsNewBar(g_trendSymbol, TrendTF, g_lastTrendBar))
      {
-      if(StrategyMode == PULLBACK) StrategyPullback();
+      if(StrategyMode == PULLBACK || StrategyMode == PULLBACK_GOLD) StrategyPullback();
       else if(StrategyMode == STRUCTURE) StrategyStructure();
       else StrategyA();
      }
@@ -1790,7 +1798,7 @@ void OnTimer()
    // also check for new bars here so a quiet chart still evaluates
    if(g_trendActive && IsNewBar(g_trendSymbol, TrendTF, g_lastTrendBar))
      {
-      if(StrategyMode == PULLBACK) StrategyPullback();
+      if(StrategyMode == PULLBACK || StrategyMode == PULLBACK_GOLD) StrategyPullback();
       else if(StrategyMode == STRUCTURE) StrategyStructure();
       else StrategyA();
      }
