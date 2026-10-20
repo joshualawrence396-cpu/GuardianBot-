@@ -22,6 +22,26 @@ Full log: `compile.log`. Artifact: `GuardianBot.ex5`.
 
 Short test windows; results say nothing about future profitability.
 
+### Live-demo verification (2026.10.20, Deriv-Demo)
+
+EA attached to `Volatility 75 (1s) Index.0` chart, `DailyProfitTarget=1`,
+`DailyMaxLoss=1`:
+
+```
+14:10:02  GuardianBot init OK | login=202539196 ccy=USD
+          | trend=Volatility 75 (1s) Index.0(PERIOD_M5) gold=-(-) build=6274
+14:10:02  Guardian: DAILY LOCK set (day P/L -11.23 USD, max loss).
+14:10:02  Guardian: account locked - daily max loss reached
+14:10:59  Guardian: order delete failed ticket=9849639737
+          Volatility 75 (1s) Index.0 retcode=10013 invalid request
+14:11:00  Guardian: closed position ticket=9849639737 ... retcode=10009
+```
+
+Manual buy placed by the user while locked was detected and closed ~2 s
+after reaching the account. Status panel displayed lock state, daily
+P/L, and `News gate (gold): UNAVAILABLE` (Deriv-Demo does not serve
+calendar data — gold entries stay fail-closed on this broker).
+
 ### Verified behaviour from run logs
 
 - **Entries placed with SL/TP, retcodes logged** — e.g.
@@ -82,16 +102,16 @@ Short test windows; results say nothing about future profitability.
 | Test | Status | Evidence |
 |---|---|---|
 | Daily profit lock | **PASS** | `DAILY LOCK set (day P/L 51.82 USD, profit target)` (multiple days) |
-| Daily loss lock | **PASS** | `DAILY LOCK set (day P/L -33.40 USD, max loss)` (multiple days) |
+| Daily loss lock | **PASS** | tester + **live demo**: `DAILY LOCK set (day P/L -11.23 USD, max loss)` on attach, status panel `LOCKED - daily threshold reached` |
 | Weekly profit lock | NOT RUN | threshold never reached (week ≈ <200 within 3-week test) |
 | Lock persists over P/L retreat / restart | PARTIAL | GV latch by design; GV persistence verified by code review; no live restart test |
 | Locks reset next period | **PASS** | new locks set on subsequent days → prior day's lock released |
 | Lock blocks both strategies | **PASS** | locks observed in both strategy runs |
 | `GuardAllSymbols=true` closes all in scope | **PASS** | position closed after every lock |
 | `=false` scope | NOT RUN | only default tested |
-| Manual/mobile trade detected & closed | NOT RUN | needs live terminal, not tester |
+| Manual/mobile trade detected & closed | **PASS** | live demo: manual buy ticket 9849639737 closed ~2s after entry (`retcode=10009`) while locked |
 | Pending orders deleted while locked | NOT RUN | EA places no pendings; manual pending not tested |
-| Failed close/delete retried | NOT RUN | all closes succeeded (rc 10009) |
+| Failed close/delete retried | **PASS** | live demo: `OrderDelete` returned 10013 (order already a position); retry loop closed the position ~2s later |
 | Two instances share lock | NOT RUN | single terminal |
 | P/L composition | PARTIAL | includes profit+swap+commission+fee on closed deals + floating; deposits excluded by DEAL_TYPE filter |
 
