@@ -76,6 +76,18 @@ else `RiskReward` applies). `MilestoneStep`+`MilestoneRiskUSD` scale the
 risk by equity milestones — e.g. step=10, risk=5 ⇒ $10 bal risks $5,
 $20 risks $10, $30 risks $15. Requires `FixedLot` mode (`RiskPercent=0`).
 
+**Strategy D — structure sweep (`StrategyMode=STRUCTURE`):** for V75.
+H4 swing structure (`H4SwingStrength`) sets direction — HH+HL = buys
+only, LH+LL = sells only; unclear structure → flat. Price must pull into
+the H1 zone (`ZoneLookback`), sweep a `SweepLookback`-bar low/high within
+`SweepMaxAge` bars, reject it (close back inside), and then close through
+the minor structure built since the sweep (BOS) on `TrendTF` (use M1).
+SL beyond the sweep extreme ± `SLBufferPoints`; TP from `RiskReward`.
+`ZoneTolerancePoints` bounds how far from the zone the sweep may occur;
+`MinPullbackPoints` enforces a real pullback from the H1 extreme.
+`MaxConsecLossesDay` (shared) halts entries after N consecutive losing
+closes today.
+
 ### Strategy B (broker server-time hours)
 
 `AsianStartHour=0`, `AsianEndHour=6`, `LondonStartHour=8`, `LondonEndHour=11`,

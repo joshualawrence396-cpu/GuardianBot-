@@ -71,6 +71,28 @@ $10→$5, $20→$10, $30→$15...), `MaxTradesPerDay=1`,
 risk/trade the account can only absorb 2 losses; the milestone ladder
 is never reached. A $5 risk unit needs ~$50+ balance to be survivable.
 
+## Strategy D (STRUCTURE) experiment — H4 bias + sweep + BOS, V75 M1
+
+User-supplied spec: H4 swing structure sets direction (HH+HL / LH+LL),
+price pulls into an H1 zone, sweeps a recent low/high and rejects,
+then entry-TF break of minor structure; SL beyond sweep extreme; 1:2.
+Config: `TrendTF=M1`, `FixedLot=0.05`, `MaxConsecLossesDay=2`,
+guardian ±$5/day.
+
+| Variant | Trades | PF | Net | Outcome |
+|---|---|---|---|---|
+| `STRUCTURE` base | **289** | **0.90** | −9.43 | balance to $0.57 |
+
+- Best signal yet by far — 289 trades, expected payoff **−$0.03/trade**
+  (essentially breakeven minus costs vs −$0.3–0.7 for A).
+- Still negative overall, and a $10 account dies on variance long before
+  any small edge could matter.
+- `MaxConsecLossesDay` implemented and active in this run.
+
+**Final verdict across all strategies on a $10 V75 account:**
+A (0.35–0.53 PF) < C (0.78) < D (0.90). Signals improved each iteration
+but no variant reaches PF ≥ 1.0 — do NOT fund R200 as-is.
+
 - PULLBACK is clearly the better signal (PF 0.78 vs 0.35–0.53, 37 trades,
   lived the full year vs weeks) — but still below breakeven.
 - **RR=3 produced identical results**: with ±$2.50/day locks at 0.05 lots,

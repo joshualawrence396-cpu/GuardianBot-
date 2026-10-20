@@ -24,7 +24,8 @@ enum ENUM_STRATEGY_MODE
    TRENDBREAK    = 0,   // Strategy A only
    SESSION_SWEEP = 1,   // Strategy B only
    BOTH          = 2,   // Both strategies from one chart
-   PULLBACK      = 3    // Strategy C: H1 trend + TrendTF pullback (V75)
+   PULLBACK      = 3,   // Strategy C: H1 trend + TrendTF pullback (V75)
+   STRUCTURE     = 4    // Strategy D: H4 bias + zone + sweep + BOS (V75)
   };
 
 //+------------------------------------------------------------------+
@@ -71,6 +72,16 @@ input double MoneySL_USD         = 0;       // Fixed risk per trade in deposit c
 input double MoneyTP_USD         = 0;       // Fixed TP in deposit ccy (0 = RiskReward x SL)
 input double MilestoneStep       = 0;       // Balance milestone step for risk scaling (0 = off)
 input double MilestoneRiskUSD    = 0;       // Risk $ per milestone step (needs MoneySL_USD>0)
+
+input group "=== Strategy D: structure sweep (H4 bias + entry BOS) ==="
+input int    H4SwingStrength     = 2;       // H4 fractal strength for structure
+input int    ZoneLookback        = 48;      // H1 bars for S/R zone
+input double ZoneTolerancePoints = 3000;    // Sweep must occur near the H1 zone level
+input double MinPullbackPoints   = 1000;    // Min drop/rise from H1 extreme to count as pullback (0 = off)
+input int    SweepLookback       = 60;      // Entry-TF bars for the swept level
+input int    SweepMaxAge         = 8;       // Sweep candle must be within last N bars
+input int    MinorBars           = 5;       // Bars between sweep and now for minor-structure BOS
+input int    MaxConsecLossesDay  = 0;       // Stop after N consecutive losses today (0 = off)
 
 input group "=== Strategy B: session sweep (server-time hours) ==="
 input int AsianStartHour  = 0;              // Asian session start (0-23)
@@ -128,6 +139,8 @@ datetime g_lastSellBreakBar = 0;
 datetime g_lastSweepBar     = 0;
 datetime g_lastPbBuyBar     = 0;
 datetime g_lastPbSellBar    = 0;
+datetime g_lastStBuyBar     = 0;
+datetime g_lastStSellBar    = 0;
 
 //--- guardian state
 datetime g_dayStart   = 0;
@@ -145,6 +158,8 @@ string   g_gvSigAS    = "";         // last SELL break-candle time
 string   g_gvSigB     = "";         // last sweep signal-candle time
 string   g_gvSigPB    = "";         // last pullback BUY signal-candle time
 string   g_gvSigPS    = "";         // last pullback SELL signal-candle time
+string   g_gvSigDB    = "";         // last structure BUY signal-candle time
+string   g_gvSigDS    = "";         // last structure SELL signal-candle time
 
 //--- news gate state
 bool     g_newsBlocked    = false;
@@ -569,6 +584,30 @@ bool StopsValid(const string sym, bool isBuy, double entry, double sl, double tp
   }
 
 //+------------------------------------------------------------------+
+//| Consecutive losing closes today (EA magic)                       |
+//+------------------------------------------------------------------+
+int TodayConsecLosses()
+  {
+   datetime now = ServerTime();
+   MqlDateTime dt; TimeToStruct(now, dt);
+   dt.hour = 0; dt.min = 0; dt.sec = 0;
+   if(!HistorySelect(StructToTime(dt), now)) return -1;
+   int streak = 0;
+   for(int i = HistoryDealsTotal() - 1; i >= 0; i--)
+     {
+      ulong tk = HistoryDealGetTicket(i);
+      if(HistoryDealGetInteger(tk, DEAL_MAGIC) != Magic) continue;
+      if(HistoryDealGetInteger(tk, DEAL_ENTRY) != DEAL_ENTRY_OUT) continue;
+      double p = HistoryDealGetDouble(tk, DEAL_PROFIT)
+               + HistoryDealGetDouble(tk, DEAL_SWAP)
+               + HistoryDealGetDouble(tk, DEAL_COMMISSION);
+      if(p < 0) streak++;
+      else break;
+     }
+   return streak;
+  }
+
+//+------------------------------------------------------------------+
 //| Shared entry path: all gates, then send order                    |
 //+------------------------------------------------------------------+
 bool TryEnter(const string sym, bool isBuy, double sl, string tag, double tpIn = -1)
@@ -599,6 +638,14 @@ bool TryEnter(const string sym, bool isBuy, double sl, string tag, double tpIn =
       if(cnt < 0) { SetBlockReason("entry count unavailable"); return false; }
       if(cnt >= MaxTradesPerDay)
         { SetBlockReason("daily entry cap reached"); return false; }
+     }
+   //--- consecutive-loss circuit breaker
+   if(MaxConsecLossesDay > 0)
+     {
+      int streak = TodayConsecLosses();
+      if(streak < 0) { SetBlockReason("loss streak unavailable"); return false; }
+      if(streak >= MaxConsecLossesDay)
+        { SetBlockReason("consecutive daily losses"); return false; }
      }
    //--- time + spread
    if(!InTradeHours(ServerTime()))
@@ -1248,6 +1295,121 @@ void StrategyPullback()
   }
 
 //+------------------------------------------------------------------+
+//| H4 market structure: true if swing direction is up (HH + HL)     |
+//+------------------------------------------------------------------+
+bool H4Direction(const string sym, bool &up, bool &dn)
+  {
+   MqlRates h[];
+   ArraySetAsSeries(h, true);
+   int n4 = CopyRates(sym, PERIOD_H4, 0, 200, h);
+   if(n4 < H4SwingStrength * 4 + 6) return false;
+   int st = H4SwingStrength;
+   double sh1 = 0, sh2 = 0, sl1 = 0, sl2 = 0;
+   int foundH = 0, foundL = 0;
+   for(int i = st + 1; i < n4 - st && (foundH < 2 || foundL < 2); i++)
+     {
+      bool isH = true, isL = true;
+      for(int j = 1; j <= st; j++)
+        {
+         if(h[i].high <= h[i - j].high || h[i].high <= h[i + j].high) isH = false;
+         if(h[i].low  >= h[i - j].low  || h[i].low  >= h[i + j].low)  isL = false;
+        }
+      if(isH) { if(foundH == 0) sh1 = h[i].high; else if(foundH == 1) sh2 = h[i].high; foundH++; }
+      if(isL) { if(foundL == 0) sl1 = h[i].low;  else if(foundL == 1) sl2 = h[i].low;  foundL++; }
+     }
+   if(foundH < 2 || foundL < 2) return false;
+   up = (sh1 > sh2 && sl1 > sl2);      // higher highs AND higher lows
+   dn = (sh1 < sh2 && sl1 < sl2);      // lower highs AND lower lows
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+//| STRATEGY D - H4 bias + H1 zone + entry-TF liquidity sweep + BOS  |
+//+------------------------------------------------------------------+
+void StrategyStructure()
+  {
+   int need = SweepLookback + SweepMaxAge + MinorBars + 10;
+   MqlRates r[];
+   ArraySetAsSeries(r, true);
+   if(CopyRates(g_trendSymbol, TrendTF, 0, need, r) < need)
+     { LogT("d_hist", "Strategy D: insufficient history on " + g_trendSymbol); return; }
+
+   double pt = SymPoint(g_trendSymbol);
+
+   //--- 4H structural bias
+   bool up = false, dn = false;
+   if(!H4Direction(g_trendSymbol, up, dn) || (!up && !dn))
+     { SetBlockReason("strategy D: no clear H4 structure"); return; }
+
+   //--- 1H zone
+   MqlRates h1[]; ArraySetAsSeries(h1, true);
+   int zn = CopyRates(g_trendSymbol, PERIOD_H1, 1, ZoneLookback, h1);
+   if(zn < ZoneLookback)
+     { SetBlockReason("strategy D: H1 zone data unavailable"); return; }
+   double zoneHi = h1[0].high, zoneLo = h1[0].low;
+   for(int i = 0; i < zn; i++) { zoneHi = MathMax(zoneHi, h1[i].high); zoneLo = MathMin(zoneLo, h1[i].low); }
+
+   //--- find most recent sweep within SweepMaxAge bars
+   int swBuy = -1, swSell = -1;
+   for(int i = 2; i <= SweepMaxAge + 1; i++)
+     {
+      double lo = r[i + 1].low, hi = r[i + 1].high;    // level = extremes BEFORE candle i
+      for(int j = i + 1; j <= i + SweepLookback && j < ArraySize(r); j++)
+        { lo = MathMin(lo, r[j].low); hi = MathMax(hi, r[j].high); }
+      if(swBuy < 0 && r[i].low < lo && r[i].close > lo)  swBuy  = i;   // swept low, rejected
+      if(swSell < 0 && r[i].high > hi && r[i].close < hi) swSell = i;  // swept high, rejected
+      if(swBuy >= 0 && swSell >= 0) break;
+     }
+
+   //--- BUY: bullish H4 + swept a low near/above H1 support + BOS above minor high
+   if(AllowBuys && up && swBuy > 0 &&
+      r[1].time != g_lastStBuyBar && !ManagedPositionExists(g_trendSymbol))
+     {
+      double sweptLo = r[swBuy + 1].low;
+      for(int j = swBuy + 1; j <= swBuy + SweepLookback && j < ArraySize(r); j++)
+         sweptLo = MathMin(sweptLo, r[j].low);
+      bool inZone = (sweptLo >= zoneLo - ZoneTolerancePoints * pt);
+      bool pulled = (MinPullbackPoints <= 0 || zoneHi - sweptLo >= MinPullbackPoints * pt);
+      if(inZone && pulled)
+        {
+         double minorHi = r[swBuy].high;
+         for(int j = 2; j < swBuy; j++) minorHi = MathMax(minorHi, r[j].high);
+         if(r[1].close > minorHi)                                   // 1M break of structure
+           {
+            double sl = r[swBuy].low - SLBufferPoints * pt;
+            if(TryEnter(g_trendSymbol, true, sl, "GB_D_BUY"))
+              { g_lastStBuyBar = r[1].time; GlobalVariableSet(g_gvSigDB, (double)g_lastStBuyBar); }
+           }
+         else SetBlockReason("sweep found, BOS confirm pending");
+        }
+      else SetBlockReason("buy sweep out of zone / no pullback");
+     }
+   //--- SELL: mirror
+   if(AllowSells && dn && swSell > 0 &&
+      r[1].time != g_lastStSellBar && !ManagedPositionExists(g_trendSymbol))
+     {
+      double sweptHi = r[swSell + 1].high;
+      for(int j = swSell + 1; j <= swSell + SweepLookback && j < ArraySize(r); j++)
+         sweptHi = MathMax(sweptHi, r[j].high);
+      bool inZone = (sweptHi <= zoneHi + ZoneTolerancePoints * pt);
+      bool pulled = (MinPullbackPoints <= 0 || sweptHi - zoneLo >= MinPullbackPoints * pt);
+      if(inZone && pulled)
+        {
+         double minorLo = r[swSell].low;
+         for(int j = 2; j < swSell; j++) minorLo = MathMin(minorLo, r[j].low);
+         if(r[1].close < minorLo)
+           {
+            double sl = r[swSell].high + SLBufferPoints * pt;
+            if(TryEnter(g_trendSymbol, false, sl, "GB_D_SELL"))
+              { g_lastStSellBar = r[1].time; GlobalVariableSet(g_gvSigDS, (double)g_lastStSellBar); }
+           }
+         else SetBlockReason("sweep found, BOS confirm pending");
+        }
+      else SetBlockReason("sell sweep out of zone / no pullback");
+     }
+  }
+
+//+------------------------------------------------------------------+
 //| STRATEGY B - session liquidity sweep & reclaim                   |
 //+------------------------------------------------------------------+
 //| Returns the most recent COMPLETED window [startH,endH) in server |
@@ -1396,7 +1558,8 @@ void DrawStatus()
                  g_newsBlocked      ? "BLOCKED: " + g_newsReason : "clear";
    string mode = (StrategyMode == TRENDBREAK) ? "TRENDBREAK" :
                  (StrategyMode == SESSION_SWEEP) ? "SESSION_SWEEP" :
-                 (StrategyMode == PULLBACK) ? "PULLBACK" : "BOTH";
+                 (StrategyMode == PULLBACK) ? "PULLBACK" :
+                 (StrategyMode == STRUCTURE) ? "STRUCTURE" : "BOTH";
    Comment(StringFormat(
       "GuardianBot v1.00 | mode=%s\n"
       "Trend: %s %s %s | Gold: %s %s %s\n"
@@ -1440,12 +1603,16 @@ int OnInit()
    g_gvSigB   = StringFormat("GRD_%I64d_SB", g_login);
    g_gvSigPB  = StringFormat("GRD_%I64d_SC_B", g_login);
    g_gvSigPS  = StringFormat("GRD_%I64d_SC_S", g_login);
+   g_gvSigDB  = StringFormat("GRD_%I64d_SD_B", g_login);
+   g_gvSigDS  = StringFormat("GRD_%I64d_SD_S", g_login);
    // restore signal-bar dedupe so a restart cannot re-fire an old signal
    if(GlobalVariableCheck(g_gvSigAB)) g_lastBuyBreakBar  = (datetime)GlobalVariableGet(g_gvSigAB);
    if(GlobalVariableCheck(g_gvSigAS)) g_lastSellBreakBar = (datetime)GlobalVariableGet(g_gvSigAS);
    if(GlobalVariableCheck(g_gvSigB))  g_lastSweepBar     = (datetime)GlobalVariableGet(g_gvSigB);
    if(GlobalVariableCheck(g_gvSigPB)) g_lastPbBuyBar     = (datetime)GlobalVariableGet(g_gvSigPB);
    if(GlobalVariableCheck(g_gvSigPS)) g_lastPbSellBar    = (datetime)GlobalVariableGet(g_gvSigPS);
+   if(GlobalVariableCheck(g_gvSigDB)) g_lastStBuyBar     = (datetime)GlobalVariableGet(g_gvSigDB);
+   if(GlobalVariableCheck(g_gvSigDS)) g_lastStSellBar    = (datetime)GlobalVariableGet(g_gvSigDS);
 
    //--- input validation
    if(RiskPercent < 0 || FixedLot <= 0 || RiskReward <= 0 ||
@@ -1473,7 +1640,8 @@ int OnInit()
    //--- resolve symbols
    g_trendSymbol = (TrendSymbol == "") ? _Symbol : TrendSymbol;
    g_goldSymbol  = GoldSymbol;
-   g_trendActive = (StrategyMode == TRENDBREAK || StrategyMode == BOTH || StrategyMode == PULLBACK);
+   g_trendActive = (StrategyMode == TRENDBREAK || StrategyMode == BOTH ||
+                    StrategyMode == PULLBACK || StrategyMode == STRUCTURE);
    g_goldActive  = (StrategyMode == SESSION_SWEEP || StrategyMode == BOTH);
 
    if(g_trendActive && !SymbolSelect(g_trendSymbol, true))
@@ -1490,6 +1658,10 @@ int OnInit()
       if(g_emaHandle == INVALID_HANDLE)
         { Print("INIT: EMA handle failed on " + g_trendSymbol + " - Strategy A disabled."); g_trendActive = false; }
      }
+   if(H4SwingStrength < 1 || ZoneLookback < 10 || SweepLookback < 10 ||
+      SweepMaxAge < 1 || MinorBars < 1 || MaxConsecLossesDay < 0)
+     { Print("INIT FAIL: strategy D parameters too small."); return INIT_PARAMETERS_INCORRECT; }
+
    //--- Strategy C handles
    if(StrategyMode == PULLBACK && g_trendActive)
      {
@@ -1552,7 +1724,11 @@ void OnTick()
   {
    Monitor();
    if(g_trendActive && IsNewBar(g_trendSymbol, TrendTF, g_lastTrendBar))
-     { if(StrategyMode == PULLBACK) StrategyPullback(); else StrategyA(); }
+     {
+      if(StrategyMode == PULLBACK) StrategyPullback();
+      else if(StrategyMode == STRUCTURE) StrategyStructure();
+      else StrategyA();
+     }
    if(g_goldActive && IsNewBar(g_goldSymbol, GoldTF, g_lastGoldBar))
       StrategyB();
   }
@@ -1563,7 +1739,11 @@ void OnTimer()
    Monitor();
    // also check for new bars here so a quiet chart still evaluates
    if(g_trendActive && IsNewBar(g_trendSymbol, TrendTF, g_lastTrendBar))
-     { if(StrategyMode == PULLBACK) StrategyPullback(); else StrategyA(); }
+     {
+      if(StrategyMode == PULLBACK) StrategyPullback();
+      else if(StrategyMode == STRUCTURE) StrategyStructure();
+      else StrategyA();
+     }
    if(g_goldActive && IsNewBar(g_goldSymbol, GoldTF, g_lastGoldBar))
       StrategyB();
   }
