@@ -67,6 +67,10 @@ input bool   UseBreakoutEntries  = false;   // Range-breakout alternative entrie
 input int    RangeBars           = 20;      // Consolidation range lookback
 input double MaxRangePoints      = 0;       // Max range width to count as consolidation (0 = off)
 input bool   BreakoutStopMidpoint = false;  // SL at range midpoint instead of far side
+input double MoneySL_USD         = 0;       // Fixed risk per trade in deposit ccy (0 = structure SL)
+input double MoneyTP_USD         = 0;       // Fixed TP in deposit ccy (0 = RiskReward x SL)
+input double MilestoneStep       = 0;       // Balance milestone step for risk scaling (0 = off)
+input double MilestoneRiskUSD    = 0;       // Risk $ per milestone step (needs MoneySL_USD>0)
 
 input group "=== Strategy B: session sweep (server-time hours) ==="
 input int AsianStartHour  = 0;              // Asian session start (0-23)
@@ -567,7 +571,7 @@ bool StopsValid(const string sym, bool isBuy, double entry, double sl, double tp
 //+------------------------------------------------------------------+
 //| Shared entry path: all gates, then send order                    |
 //+------------------------------------------------------------------+
-bool TryEnter(const string sym, bool isBuy, double sl, string tag)
+bool TryEnter(const string sym, bool isBuy, double sl, string tag, double tpIn = -1)
   {
    //--- guardian lock
    if(g_dailyLock || g_weeklyLock)
@@ -617,8 +621,9 @@ bool TryEnter(const string sym, bool isBuy, double sl, string tag)
    sl = NormPrice(sym, sl);
    double risk = MathAbs(entry - sl);
    if(risk <= 0) { SetBlockReason("zero risk distance"); return false; }
-   double tp = NormPrice(sym, isBuy ? entry + RiskReward * risk
-                                    : entry - RiskReward * risk);
+   double tp = NormPrice(sym, tpIn > 0 ? tpIn
+                         : isBuy ? entry + RiskReward * risk
+                                 : entry - RiskReward * risk);
    if(!StopsValid(sym, isBuy, entry, sl, tp)) return false;
    //--- volume
    double vol;
@@ -1081,6 +1086,19 @@ void StrategyA()
   }
 
 //+------------------------------------------------------------------+
+//| Money-based risk: flat or milestone-scaled fixed-$ risk          |
+//+------------------------------------------------------------------+
+double MoneyRiskUSD()
+  {
+   if(MoneySL_USD <= 0) return 0;
+   if(MilestoneStep <= 0 || MilestoneRiskUSD <= 0) return MoneySL_USD;
+   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(eq <= 0) return MoneySL_USD;
+   int steps = (int)MathFloor(eq / MilestoneStep);
+   return MilestoneRiskUSD * MathMax(1, steps);
+  }
+
+//+------------------------------------------------------------------+
 //| STRATEGY C - H1 trend filter + TrendTF pullback entry            |
 //+------------------------------------------------------------------+
 void StrategyPullback()
@@ -1132,24 +1150,59 @@ void StrategyPullback()
       if(r[1].high >= srLow  && r[1].high <= srHigh) pbSell = true;
      }
 
+   //--- optional money-based stop sizing (fixed $ or milestone-scaled)
+   double riskUSD = MoneyRiskUSD();
+   double tv = 0, ts = 0;
+   if(riskUSD > 0)
+     {
+      tv = SymbolInfoDouble(g_trendSymbol, SYMBOL_TRADE_TICK_VALUE);
+      ts = SymbolInfoDouble(g_trendSymbol, SYMBOL_TRADE_TICK_SIZE);
+      if(tv <= 0 || ts <= 0 || RiskPercent > 0)
+        { SetBlockReason("money stop: tick data missing or RiskPercent>0"); return; }
+     }
+
    //--- BUY: close back in trend direction above the EMA
    if(AllowBuys && up && pbBuy && r[1].close > r[1].open && r[1].close > e20[0] &&
       r[1].time != g_lastPbBuyBar && !ManagedPositionExists(g_trendSymbol))
      {
-      int sw = MathMin(PullbackSwingBars, ArraySize(r) - 1);
-      double lo = r[1].low;
-      for(int s = 1; s <= sw; s++) lo = MathMin(lo, r[s].low);
-      if(TryEnter(g_trendSymbol, true, lo - SLBufferPoints * pt, "GB_C_BUY"))
+      double sl, tp = -1;
+      if(riskUSD > 0)
+        {
+         double px = SymbolInfoDouble(g_trendSymbol, SYMBOL_BID);
+         double dist = riskUSD * ts / (tv * FixedLot);
+         sl = px - dist;
+         if(MoneyTP_USD > 0) tp = px + dist * (MoneyTP_USD / MoneySL_USD);
+        }
+      else
+        {
+         int sw = MathMin(PullbackSwingBars, ArraySize(r) - 1);
+         double lo = r[1].low;
+         for(int s = 1; s <= sw; s++) lo = MathMin(lo, r[s].low);
+         sl = lo - SLBufferPoints * pt;
+        }
+      if(TryEnter(g_trendSymbol, true, sl, "GB_C_BUY", tp))
         { g_lastPbBuyBar = r[1].time; GlobalVariableSet(g_gvSigPB, (double)g_lastPbBuyBar); }
      }
    //--- SELL: mirror
    if(AllowSells && dn && pbSell && r[1].close < r[1].open && r[1].close < e20[0] &&
       r[1].time != g_lastPbSellBar && !ManagedPositionExists(g_trendSymbol))
      {
-      int sw = MathMin(PullbackSwingBars, ArraySize(r) - 1);
-      double hi = r[1].high;
-      for(int s = 1; s <= sw; s++) hi = MathMax(hi, r[s].high);
-      if(TryEnter(g_trendSymbol, false, hi + SLBufferPoints * pt, "GB_C_SELL"))
+      double sl, tp = -1;
+      if(riskUSD > 0)
+        {
+         double px = SymbolInfoDouble(g_trendSymbol, SYMBOL_ASK);
+         double dist = riskUSD * ts / (tv * FixedLot);
+         sl = px + dist;
+         if(MoneyTP_USD > 0) tp = px - dist * (MoneyTP_USD / MoneySL_USD);
+        }
+      else
+        {
+         int sw = MathMin(PullbackSwingBars, ArraySize(r) - 1);
+         double hi = r[1].high;
+         for(int s = 1; s <= sw; s++) hi = MathMax(hi, r[s].high);
+         sl = hi + SLBufferPoints * pt;
+        }
+      if(TryEnter(g_trendSymbol, false, sl, "GB_C_SELL", tp))
         { g_lastPbSellBar = r[1].time; GlobalVariableSet(g_gvSigPS, (double)g_lastPbSellBar); }
      }
 
@@ -1164,14 +1217,30 @@ void StrategyPullback()
          double mid = (rh + rl) / 2.0;
          if(AllowBuys && up && r[1].close > rh && r[1].time != g_lastPbBuyBar)
            {
-            double sl = (BreakoutStopMidpoint ? mid : rl) - SLBufferPoints * pt;
-            if(TryEnter(g_trendSymbol, true, sl, "GB_C_BO_BUY"))
+            double sl, tp = -1;
+            if(riskUSD > 0)
+              {
+               double px = SymbolInfoDouble(g_trendSymbol, SYMBOL_BID);
+               double dist = riskUSD * ts / (tv * FixedLot);
+               sl = px - dist;
+               if(MoneyTP_USD > 0) tp = px + dist * (MoneyTP_USD / MoneySL_USD);
+              }
+            else sl = (BreakoutStopMidpoint ? mid : rl) - SLBufferPoints * pt;
+            if(TryEnter(g_trendSymbol, true, sl, "GB_C_BO_BUY", tp))
               { g_lastPbBuyBar = r[1].time; GlobalVariableSet(g_gvSigPB, (double)g_lastPbBuyBar); }
            }
          if(AllowSells && dn && r[1].close < rl && r[1].time != g_lastPbSellBar)
            {
-            double sl = (BreakoutStopMidpoint ? mid : rh) + SLBufferPoints * pt;
-            if(TryEnter(g_trendSymbol, false, sl, "GB_C_BO_SELL"))
+            double sl, tp = -1;
+            if(riskUSD > 0)
+              {
+               double px = SymbolInfoDouble(g_trendSymbol, SYMBOL_ASK);
+               double dist = riskUSD * ts / (tv * FixedLot);
+               sl = px + dist;
+               if(MoneyTP_USD > 0) tp = px - dist * (MoneyTP_USD / MoneySL_USD);
+              }
+            else sl = (BreakoutStopMidpoint ? mid : rh) + SLBufferPoints * pt;
+            if(TryEnter(g_trendSymbol, false, sl, "GB_C_BO_SELL", tp))
               { g_lastPbSellBar = r[1].time; GlobalVariableSet(g_gvSigPS, (double)g_lastPbSellBar); }
            }
         }
@@ -1383,7 +1452,8 @@ int OnInit()
       BreakevenAtR < 0 || MaxTradesPerDay < 0 || MaxSpreadPoints < 0 ||
       SLBufferPoints < 0 || MinSweepPoints <= 0 ||
       DailyProfitTarget < 0 || WeeklyProfitTarget < 0 || DailyMaxLoss < 0 ||
-      NewsMinsBefore < 0 || NewsMinsAfter < 0)
+      NewsMinsBefore < 0 || NewsMinsAfter < 0 ||
+      MoneySL_USD < 0 || MoneyTP_USD < 0 || MilestoneStep < 0 || MilestoneRiskUSD < 0)
      { Print("INIT FAIL: negative/invalid numeric input."); return INIT_PARAMETERS_INCORRECT; }
    if(BuyConfirmCandles < 1 || SellConfirmCandles < 1)
      { Print("INIT FAIL: confirmation candles must be >= 1."); return INIT_PARAMETERS_INCORRECT; }

@@ -70,6 +70,12 @@ breakouts (`RangeBars`, optional `MaxRangePoints` width cap,
 `BreakoutStopMidpoint`). Signal-bar dedupe persisted via Global
 Variables, same as other legs.
 
+**Money-based risk (Strategy C):** `MoneySL_USD` replaces the structure
+SL with a fixed deposit-currency risk (`MoneyTP_USD` gives a fixed-$ TP,
+else `RiskReward` applies). `MilestoneStep`+`MilestoneRiskUSD` scale the
+risk by equity milestones — e.g. step=10, risk=5 ⇒ $10 bal risks $5,
+$20 risks $10, $30 risks $15. Requires `FixedLot` mode (`RiskPercent=0`).
+
 ### Strategy B (broker server-time hours)
 
 `AsianStartHour=0`, `AsianEndHour=6`, `LondonStartHour=8`, `LondonEndHour=11`,

@@ -62,6 +62,14 @@ trend; SL beyond pullback swing; 1:2 RR; chop gate around EMAs.
 | `PULLBACK` base | 37 | **0.78** | −9.74 | survived the year, ended $0.26 |
 | `PULLBACK` shorts-only | 8 | 0.32 | −10.52 | negative balance |
 | `PULLBACK` RR=3 | 37 | 0.78 | −9.74 | **identical** — see note |
+| `PULLBACK` money-plan | 6 | 0.51 | −9.55 | **stop-out ~Jan 6 (1%)** |
+
+Money-plan = user's R200 scheme: `MoneySL_USD=5`, `MoneyTP_USD=5`,
+`MilestoneStep=10`, `MilestoneRiskUSD=5` (equity-scaled risk:
+$10→$5, $20→$10, $30→$15...), `MaxTradesPerDay=1`,
+`BreakevenAtR=1.0`, guardian ±$5/day. **Dead in ~5 days**: at $5
+risk/trade the account can only absorb 2 losses; the milestone ladder
+is never reached. A $5 risk unit needs ~$50+ balance to be survivable.
 
 - PULLBACK is clearly the better signal (PF 0.78 vs 0.35–0.53, 37 trades,
   lived the full year vs weeks) — but still below breakeven.
