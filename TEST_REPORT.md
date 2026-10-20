@@ -83,6 +83,11 @@ guardian ±$5/day.
 |---|---|---|---|---|
 | `STRUCTURE` base | **289** | **0.90** | −9.43 | balance to $0.57 |
 | `STRUCTURE` buys-only | 185 | 0.84 | −9.25 | balance to $0.75 |
+| `STRUCTURE` $27 (~R500) | 434 | 0.82 | −26.49 | balance to $0.51 |
+
+More capital did not help: 434 trades got through but PF stayed < 1, so
+the bigger balance just bled longer. A negative-EV signal cannot be
+fixed by deposit size.
 
 - Best signal yet by far — 289 trades, expected payoff **−$0.03/trade**
   (essentially breakeven minus costs vs −$0.3–0.7 for A).
