@@ -19,8 +19,24 @@ Full log: `compile.log`. Artifact: `GuardianBot.ex5`.
 | Strategy A | `Volatility 75 (1s) Index.0` | M5 | 2026.10.01–10.20 | **19 trades**, net −64.01, PF 0.85 | `GuardianBot_V75_M5.htm` |
 | Strategy B | `XAUUSD.0` | M15 | 2026.10.01–10.20 | **13 trades**, net +48.21, PF 1.18 | `GuardianBot_XAU_M15.htm` |
 | Strategy B (news filter ON) | `XAUUSD.0` | M15 | same | **0 trades — all blocked by fail-closed news gate** | `GuardianBot_XAU_M15_newsfilter.htm` |
+| Strategy A — year sim | `Volatility 75 (1s) Index.0` | M5 | 2026.01.01–10.20 | **14 trades, account blown** — net −9.56, max DD 96.9%, balance 0.44 | `GuardianBot_V75_year.htm` |
 
 Short test windows; results say nothing about future profitability.
+
+### Year-long run — user's intended live config
+
+`Deposit=10 USD` (≈R200), `FixedLot=0.10`, `RiskPercent=0`,
+`DailyProfitTarget=2.50`, `DailyMaxLoss=2.50`, `WeeklyProfitTarget=12.50`,
+`MaxTradesPerDay=5`:
+
+- **14 real trades** before the account could no longer meet margin;
+  every later signal logged `retcode=10019 not enough money`.
+- Balance hit **$0.44 by ~2026-02-20** — under 8 weeks.
+- The guardian locked correctly throughout; the failure is position
+  sizing: 0.10 lots ≈ $3 risk/trade ≈ 30% of a $10 account.
+- Conclusion: R200 with 0.10 lots is not viable. Minimum viable is
+  `FixedLot` at the symbol's min volume (check `SYMBOL_VOLUME_MIN`,
+  likely 0.001) or a larger deposit.
 
 ### Live-demo verification (2026.10.20, Deriv-Demo)
 
