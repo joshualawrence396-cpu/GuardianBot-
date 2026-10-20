@@ -58,6 +58,18 @@ short backtest.
 `CleanBars=8`, `TrendFilterEMA=0` (EMA on TrendTF; only trades in the
 direction of the trend — 0 disables).
 
+**Strategy C — trend pullback (`StrategyMode=PULLBACK`):** designed for
+Volatility indices. H1 close vs `H1EMAPeriod` (50) sets allowed direction;
+`ChopFilterPoints` distance from that EMA must be exceeded (anti-chop).
+Entry on `TrendTF` (use M15): price must have tagged `EntryEMAPeriod`
+(20) — or, if `UseSRRetest`, retested a recent `SRLookback` swing level —
+within `PullbackBars`, then the signal candle must close back in trend
+direction. SL = `PullbackSwingBars` extreme ± `SLBufferPoints`; TP from
+`RiskReward`. Optional `UseBreakoutEntries` adds consolidation-range
+breakouts (`RangeBars`, optional `MaxRangePoints` width cap,
+`BreakoutStopMidpoint`). Signal-bar dedupe persisted via Global
+Variables, same as other legs.
+
 ### Strategy B (broker server-time hours)
 
 `AsianStartHour=0`, `AsianEndHour=6`, `LondonStartHour=8`, `LondonEndHour=11`,

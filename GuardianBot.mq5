@@ -23,7 +23,8 @@ enum ENUM_STRATEGY_MODE
   {
    TRENDBREAK    = 0,   // Strategy A only
    SESSION_SWEEP = 1,   // Strategy B only
-   BOTH          = 2    // Both strategies from one chart
+   BOTH          = 2,   // Both strategies from one chart
+   PULLBACK      = 3    // Strategy C: H1 trend + TrendTF pullback (V75)
   };
 
 //+------------------------------------------------------------------+
@@ -53,6 +54,19 @@ input int    Lookback            = 120;     // Bars to search for swings
 input int    MinSwingGap         = 6;       // Min bars between anchors
 input int    CleanBars           = 8;       // Bars before break on original side
 input int    TrendFilterEMA      = 0;       // EMA trend filter on TrendTF (0 = off)
+
+input group "=== Strategy C: trend pullback (H1 filter + TrendTF entry) ==="
+input int    H1EMAPeriod         = 50;      // Trend filter EMA period on H1
+input int    EntryEMAPeriod      = 20;      // Pullback EMA period on TrendTF
+input double ChopFilterPoints    = 2000;    // Min H1 close-EMA distance to avoid chop (0 = off)
+input int    PullbackBars        = 3;       // Pullback must touch EMA20 within last N bars
+input int    PullbackSwingBars   = 10;      // SL = extreme of last N bars
+input bool   UseSRRetest         = true;    // Also allow retest of recent swing level
+input int    SRLookback          = 40;      // Bars for support/resistance level
+input bool   UseBreakoutEntries  = false;   // Range-breakout alternative entries
+input int    RangeBars           = 20;      // Consolidation range lookback
+input double MaxRangePoints      = 0;       // Max range width to count as consolidation (0 = off)
+input bool   BreakoutStopMidpoint = false;  // SL at range midpoint instead of far side
 
 input group "=== Strategy B: session sweep (server-time hours) ==="
 input int AsianStartHour  = 0;              // Asian session start (0-23)
@@ -101,11 +115,15 @@ long     g_login         = 0;
 datetime g_lastTrendBar = 0;
 datetime g_lastGoldBar  = 0;
 int      g_emaHandle    = INVALID_HANDLE;
+int      g_emaH1        = INVALID_HANDLE;   // Strategy C trend filter
+int      g_emaEntry     = INVALID_HANDLE;   // Strategy C pullback EMA
 
 //--- signal dedupe (per signal candle time)
 datetime g_lastBuyBreakBar  = 0;
 datetime g_lastSellBreakBar = 0;
 datetime g_lastSweepBar     = 0;
+datetime g_lastPbBuyBar     = 0;
+datetime g_lastPbSellBar    = 0;
 
 //--- guardian state
 datetime g_dayStart   = 0;
@@ -121,6 +139,8 @@ string   g_gvWeek     = "";
 string   g_gvSigAB    = "";         // last BUY break-candle time (restart dedupe)
 string   g_gvSigAS    = "";         // last SELL break-candle time
 string   g_gvSigB     = "";         // last sweep signal-candle time
+string   g_gvSigPB    = "";         // last pullback BUY signal-candle time
+string   g_gvSigPS    = "";         // last pullback SELL signal-candle time
 
 //--- news gate state
 bool     g_newsBlocked    = false;
@@ -1061,6 +1081,104 @@ void StrategyA()
   }
 
 //+------------------------------------------------------------------+
+//| STRATEGY C - H1 trend filter + TrendTF pullback entry            |
+//+------------------------------------------------------------------+
+void StrategyPullback()
+  {
+   int need = MathMax(MathMax(SRLookback, RangeBars), PullbackSwingBars) + PullbackBars + 10;
+   MqlRates r[];
+   ArraySetAsSeries(r, true);
+   if(CopyRates(g_trendSymbol, TrendTF, 0, need, r) < need)
+     { LogT("c_hist", "Strategy C: insufficient history on " + g_trendSymbol); return; }
+
+   double pt = SymPoint(g_trendSymbol);
+
+   //--- H1 trend filter: only trade with the H1 EMA side, skip chop
+   double e50[]; ArraySetAsSeries(e50, true);
+   MqlRates h1[];  ArraySetAsSeries(h1, true);
+   if(CopyBuffer(g_emaH1, 0, 1, 1, e50) != 1 ||
+      CopyRates(g_trendSymbol, PERIOD_H1, 1, 1, h1) != 1)
+     { SetBlockReason("strategy C: H1 trend filter data unavailable"); return; }
+   bool up = h1[0].close > e50[0], dn = h1[0].close < e50[0];
+   if(ChopFilterPoints > 0 && MathAbs(h1[0].close - e50[0]) < ChopFilterPoints * pt)
+     { SetBlockReason("chop: H1 price hugging EMA50"); up = dn = false; }
+
+   //--- entry EMA buffer on TrendTF
+   int pb = MathMin(PullbackBars, ArraySize(r) - 2);
+   double e20[]; ArraySetAsSeries(e20, true);
+   if(CopyBuffer(g_emaEntry, 0, 1, pb + 1, e20) < pb + 1)
+     { SetBlockReason("strategy C: entry EMA data unavailable"); return; }
+   // e20[i] = entry EMA at bar shift (i+1)
+
+   //--- recent S/R level (broken level retest)
+   double srHigh = 0, srLow = 0;
+   if(UseSRRetest)
+     {
+      int hb = MathMin(SRLookback, ArraySize(r) - 1);
+      srHigh = r[2].high; srLow = r[2].low;
+      for(int i = 2; i <= hb; i++) { srHigh = MathMax(srHigh, r[i].high); srLow = MathMin(srLow, r[i].low); }
+     }
+
+   //--- pullback detection: price touched EMA within last PullbackBars, or retested S/R
+   bool pbBuy = false, pbSell = false;
+   for(int s = 1; s <= pb; s++)
+     {
+      if(r[s].low  <= e20[s - 1]) pbBuy  = true;
+      if(r[s].high >= e20[s - 1]) pbSell = true;
+     }
+   if(UseSRRetest)
+     {
+      if(r[1].low  <= srHigh && r[1].low  >= srLow) pbBuy  = true;
+      if(r[1].high >= srLow  && r[1].high <= srHigh) pbSell = true;
+     }
+
+   //--- BUY: close back in trend direction above the EMA
+   if(AllowBuys && up && pbBuy && r[1].close > r[1].open && r[1].close > e20[0] &&
+      r[1].time != g_lastPbBuyBar && !ManagedPositionExists(g_trendSymbol))
+     {
+      int sw = MathMin(PullbackSwingBars, ArraySize(r) - 1);
+      double lo = r[1].low;
+      for(int s = 1; s <= sw; s++) lo = MathMin(lo, r[s].low);
+      if(TryEnter(g_trendSymbol, true, lo - SLBufferPoints * pt, "GB_C_BUY"))
+        { g_lastPbBuyBar = r[1].time; GlobalVariableSet(g_gvSigPB, (double)g_lastPbBuyBar); }
+     }
+   //--- SELL: mirror
+   if(AllowSells && dn && pbSell && r[1].close < r[1].open && r[1].close < e20[0] &&
+      r[1].time != g_lastPbSellBar && !ManagedPositionExists(g_trendSymbol))
+     {
+      int sw = MathMin(PullbackSwingBars, ArraySize(r) - 1);
+      double hi = r[1].high;
+      for(int s = 1; s <= sw; s++) hi = MathMax(hi, r[s].high);
+      if(TryEnter(g_trendSymbol, false, hi + SLBufferPoints * pt, "GB_C_SELL"))
+        { g_lastPbSellBar = r[1].time; GlobalVariableSet(g_gvSigPS, (double)g_lastPbSellBar); }
+     }
+
+   //--- range-breakout alternative entries
+   if(UseBreakoutEntries && !ManagedPositionExists(g_trendSymbol))
+     {
+      int rb = MathMin(RangeBars, ArraySize(r) - 2);
+      double rh = r[2].high, rl = r[2].low;
+      for(int s = 2; s <= rb + 1; s++) { rh = MathMax(rh, r[s].high); rl = MathMin(rl, r[s].low); }
+      if(MaxRangePoints <= 0 || (rh - rl) <= MaxRangePoints * pt)
+        {
+         double mid = (rh + rl) / 2.0;
+         if(AllowBuys && up && r[1].close > rh && r[1].time != g_lastPbBuyBar)
+           {
+            double sl = (BreakoutStopMidpoint ? mid : rl) - SLBufferPoints * pt;
+            if(TryEnter(g_trendSymbol, true, sl, "GB_C_BO_BUY"))
+              { g_lastPbBuyBar = r[1].time; GlobalVariableSet(g_gvSigPB, (double)g_lastPbBuyBar); }
+           }
+         if(AllowSells && dn && r[1].close < rl && r[1].time != g_lastPbSellBar)
+           {
+            double sl = (BreakoutStopMidpoint ? mid : rh) + SLBufferPoints * pt;
+            if(TryEnter(g_trendSymbol, false, sl, "GB_C_BO_SELL"))
+              { g_lastPbSellBar = r[1].time; GlobalVariableSet(g_gvSigPS, (double)g_lastPbSellBar); }
+           }
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
 //| STRATEGY B - session liquidity sweep & reclaim                   |
 //+------------------------------------------------------------------+
 //| Returns the most recent COMPLETED window [startH,endH) in server |
@@ -1208,7 +1326,8 @@ void DrawStatus()
                  !g_newsAvail       ? "UNAVAILABLE (gold blocked)" :
                  g_newsBlocked      ? "BLOCKED: " + g_newsReason : "clear";
    string mode = (StrategyMode == TRENDBREAK) ? "TRENDBREAK" :
-                 (StrategyMode == SESSION_SWEEP) ? "SESSION_SWEEP" : "BOTH";
+                 (StrategyMode == SESSION_SWEEP) ? "SESSION_SWEEP" :
+                 (StrategyMode == PULLBACK) ? "PULLBACK" : "BOTH";
    Comment(StringFormat(
       "GuardianBot v1.00 | mode=%s\n"
       "Trend: %s %s %s | Gold: %s %s %s\n"
@@ -1250,10 +1369,14 @@ int OnInit()
    g_gvSigAB  = StringFormat("GRD_%I64d_SA_B", g_login);
    g_gvSigAS  = StringFormat("GRD_%I64d_SA_S", g_login);
    g_gvSigB   = StringFormat("GRD_%I64d_SB", g_login);
+   g_gvSigPB  = StringFormat("GRD_%I64d_SC_B", g_login);
+   g_gvSigPS  = StringFormat("GRD_%I64d_SC_S", g_login);
    // restore signal-bar dedupe so a restart cannot re-fire an old signal
    if(GlobalVariableCheck(g_gvSigAB)) g_lastBuyBreakBar  = (datetime)GlobalVariableGet(g_gvSigAB);
    if(GlobalVariableCheck(g_gvSigAS)) g_lastSellBreakBar = (datetime)GlobalVariableGet(g_gvSigAS);
    if(GlobalVariableCheck(g_gvSigB))  g_lastSweepBar     = (datetime)GlobalVariableGet(g_gvSigB);
+   if(GlobalVariableCheck(g_gvSigPB)) g_lastPbBuyBar     = (datetime)GlobalVariableGet(g_gvSigPB);
+   if(GlobalVariableCheck(g_gvSigPS)) g_lastPbSellBar    = (datetime)GlobalVariableGet(g_gvSigPS);
 
    //--- input validation
    if(RiskPercent < 0 || FixedLot <= 0 || RiskReward <= 0 ||
@@ -1280,22 +1403,30 @@ int OnInit()
    //--- resolve symbols
    g_trendSymbol = (TrendSymbol == "") ? _Symbol : TrendSymbol;
    g_goldSymbol  = GoldSymbol;
-   g_trendActive = (StrategyMode == TRENDBREAK || StrategyMode == BOTH);
+   g_trendActive = (StrategyMode == TRENDBREAK || StrategyMode == BOTH || StrategyMode == PULLBACK);
    g_goldActive  = (StrategyMode == SESSION_SWEEP || StrategyMode == BOTH);
 
    if(g_trendActive && !SymbolSelect(g_trendSymbol, true))
-     { Print("INIT: trend symbol '" + g_trendSymbol + "' unavailable - Strategy A disabled."); g_trendActive = false; }
+     { Print("INIT: trend symbol '" + g_trendSymbol + "' unavailable - trend leg disabled."); g_trendActive = false; }
    if(g_goldActive && !SymbolSelect(g_goldSymbol, true))
      { Print("INIT: gold symbol '" + g_goldSymbol + "' unavailable - Strategy B disabled."); g_goldActive = false; }
    if(!g_trendActive && !g_goldActive)
      { Print("INIT FAIL: no strategy leg could be enabled."); return INIT_FAILED; }
 
    //--- optional EMA trend filter for Strategy A
-   if(TrendFilterEMA > 0 && g_trendActive)
+   if(TrendFilterEMA > 0 && g_trendActive && StrategyMode != PULLBACK)
      {
       g_emaHandle = iMA(g_trendSymbol, TrendTF, TrendFilterEMA, 0, MODE_EMA, PRICE_CLOSE);
       if(g_emaHandle == INVALID_HANDLE)
         { Print("INIT: EMA handle failed on " + g_trendSymbol + " - Strategy A disabled."); g_trendActive = false; }
+     }
+   //--- Strategy C handles
+   if(StrategyMode == PULLBACK && g_trendActive)
+     {
+      g_emaH1    = iMA(g_trendSymbol, PERIOD_H1, H1EMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
+      g_emaEntry = iMA(g_trendSymbol, TrendTF, EntryEMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
+      if(g_emaH1 == INVALID_HANDLE || g_emaEntry == INVALID_HANDLE)
+        { Print("INIT: pullback EMA handles failed on " + g_trendSymbol + " - Strategy C disabled."); g_trendActive = false; }
      }
    if(!g_trendActive && !g_goldActive)
      { Print("INIT FAIL: no strategy leg could be enabled."); return INIT_FAILED; }
@@ -1328,6 +1459,8 @@ void OnDeinit(const int reason)
   {
    EventKillTimer();
    if(g_emaHandle != INVALID_HANDLE) IndicatorRelease(g_emaHandle);
+   if(g_emaH1 != INVALID_HANDLE) IndicatorRelease(g_emaH1);
+   if(g_emaEntry != INVALID_HANDLE) IndicatorRelease(g_emaEntry);
    Comment("");
    Print("GuardianBot deinit, reason=", reason);
   }
@@ -1349,7 +1482,7 @@ void OnTick()
   {
    Monitor();
    if(g_trendActive && IsNewBar(g_trendSymbol, TrendTF, g_lastTrendBar))
-      StrategyA();
+     { if(StrategyMode == PULLBACK) StrategyPullback(); else StrategyA(); }
    if(g_goldActive && IsNewBar(g_goldSymbol, GoldTF, g_lastGoldBar))
       StrategyB();
   }
@@ -1360,7 +1493,7 @@ void OnTimer()
    Monitor();
    // also check for new bars here so a quiet chart still evaluates
    if(g_trendActive && IsNewBar(g_trendSymbol, TrendTF, g_lastTrendBar))
-      StrategyA();
+     { if(StrategyMode == PULLBACK) StrategyPullback(); else StrategyA(); }
    if(g_goldActive && IsNewBar(g_goldSymbol, GoldTF, g_lastGoldBar))
       StrategyB();
   }

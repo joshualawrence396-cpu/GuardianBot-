@@ -48,16 +48,33 @@ All runs: same symbol/TF/window, `Deposit=10`, guardian ±$2.50/day.
 | `0.05` + `TrendFilterEMA=200` | 18 | 0.35 | −9.68 | **stop-out, 2% of year** |
 | `0.05`, `AllowSells=false` | 27 | 0.49 | −10.34 | negative balance ~May |
 
-**Verdict: every variant loses the full account.** Profit factor stays
-0.35–0.53 across filters and direction biases — the signal itself has
-negative expectancy on this data, not just a sizing problem. V75 is a
-synthetic random-walk instrument; no edge was found in 2026 YTD data.
-Recommendation: **do not fund a live account with this strategy as-is.**
-The EA mechanics (guardian, sizing validation, fail-safes) all performed
-correctly — the entry signal is the part without demonstrated edge.
+**Verdict on Strategy A: every variant loses the full account.** PF stays
+0.35–0.53 across filters and direction biases.
 
-The `TrendFilterEMA` input added during this experiment remains in the
-EA (default `0` = off).
+## Strategy C (PULLBACK) experiment — same $10 account, V75 M15, H1 EMA50 filter
+
+User-supplied spec: H1 price above/below 50-EMA sets direction; enter on
+M15 pullback to 20-EMA or S/R retest when a candle closes back with the
+trend; SL beyond pullback swing; 1:2 RR; chop gate around EMAs.
+
+| Variant | Trades | PF | Net | Outcome |
+|---|---|---|---|---|
+| `PULLBACK` base | 37 | **0.78** | −9.74 | survived the year, ended $0.26 |
+| `PULLBACK` shorts-only | 8 | 0.32 | −10.52 | negative balance |
+| `PULLBACK` RR=3 | 37 | 0.78 | −9.74 | **identical** — see note |
+
+- PULLBACK is clearly the better signal (PF 0.78 vs 0.35–0.53, 37 trades,
+  lived the full year vs weeks) — but still below breakeven.
+- **RR=3 produced identical results**: with ±$2.50/day locks at 0.05 lots,
+  the guardian closes trades ~$2.50 up/down long before any TP fills —
+  the lock IS the take-profit. Raising `RiskReward` is invisible.
+- Structural consequence: with symmetric ±$2.50 locks the account can only
+  grow if P(winning day) > P(losing day); in the data it isn't.
+- Net of all tests: **no configuration tested survives a $10 account on
+  V75.** The signal quality improved (A→C) but expectancy stays negative.
+
+The `TrendFilterEMA` and Strategy C (`PULLBACK` mode + its inputs) added
+during these experiments remain in the EA, all defaults inert/off.
 
 ### Live-demo verification (2026.10.20, Deriv-Demo)
 
