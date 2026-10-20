@@ -89,6 +89,13 @@ More capital did not help: 434 trades got through but PF stayed < 1, so
 the bigger balance just bled longer. A negative-EV signal cannot be
 fixed by deposit size.
 
+Same-size comparison on V75 (deposit ≈$27, FixedLot 0.05, ±$5/day):
+
+| Strategy | Trades | PF | Net | Final |
+|---|---|---|---|---|
+| D structure | 434 | 0.82 | −26.49 | $0.51 |
+| A trendline-break | 59 | 0.55 | −27.39 | **−$0.39** |
+
 - Best signal yet by far — 289 trades, expected payoff **−$0.03/trade**
   (essentially breakeven minus costs vs −$0.3–0.7 for A).
 - Still negative overall, and a $10 account dies on variance long before
