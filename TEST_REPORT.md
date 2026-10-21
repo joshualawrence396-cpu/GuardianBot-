@@ -220,6 +220,24 @@ negative edge on this dataset, period. The new inputs remain available
 for other symbols/regimes, but on V75 the answer is unchanged:
 `AllowSells=0`.
 
+### Parameter sweep round 3 (2026.10.21, buys-only base) — reports `GB_x_*.htm`
+
+| Variant | Trades | PF | Net | Max DD |
+|---|---|---|---|---|
+| Base (RR2, BE1R, body 50%) | 220 | 1.40 | +$120.58 | 17.2% |
+| RR 1.75 | 229 | 1.34 | +$107.44 | 18.9% |
+| RR 2.5 | 214 | 1.40 | +$117.64 | 17.8% |
+| Body 60% | 216 | 1.34 | +$105.19 | 21.1% |
+| Body 40% | 226 | 1.25 | +$84.66 | 27.0% |
+| **BE at 0.75R** | 233 | **1.48** | **+$127.57** | **22.4%** |
+| H1 EMA 100 trend | 223 | 1.41 | +$116.16 | 75.2% (rejected) |
+
+**New champion: `BreakevenAtR=0.75`.** Moving to breakeven earlier locks
+winners before V75's sharp reversals — PF 1.40→1.48, net +$7 higher, at
+the cost of slightly deeper DD (17%→22%). RR curve confirmed flat-topped
+at 2R; body filter confirmed optimal at 50%; slower H1 EMA traded PF for
+catastrophic drawdown.
+
 ## Strategy B on gold — R1000 (~$55) account, year sim
 
 `XAUUSD.0` M15, `FixedLot=0.01`, `MoneySL_USD=5.5`/`MoneyTP_USD=5.5`
