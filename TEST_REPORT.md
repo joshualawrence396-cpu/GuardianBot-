@@ -238,6 +238,19 @@ the cost of slightly deeper DD (17%→22%). RR curve confirmed flat-topped
 at 2R; body filter confirmed optimal at 50%; slower H1 EMA traded PF for
 catastrophic drawdown.
 
+### BE 0.75R applied to mixed directions (2026.10.21) — report `GB_mix_be075.htm`
+
+| Variant | Trades | PF | Net | Max DD |
+|---|---|---|---|---|
+| Both dirs, BE 1R | 376 | 1.24 | +$122.44 | 29.9% |
+| **Both dirs, BE 0.75R** | 386 | **1.31** | **+$141.16** | **25.7%** |
+| Buys only, BE 0.75R | 233 | 1.48 | +$127.57 | 22.4% |
+
+Early breakeven helps shorts too: mixed PF 1.24→1.31 and it actually
+banks *more* net profit than buys-only (+$141 vs +$128) — but at lower
+PF and higher DD. Buys-only keeps the cleanest per-trade edge; mixed is
+the higher-yield/higher-variance option.
+
 ## Strategy B on gold — R1000 (~$55) account, year sim
 
 `XAUUSD.0` M15, `FixedLot=0.01`, `MoneySL_USD=5.5`/`MoneyTP_USD=5.5`
