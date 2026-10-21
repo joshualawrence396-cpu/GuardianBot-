@@ -186,6 +186,20 @@ edge); tight ±$5 day locks + strong signal candles wins.
 `FixedLot=0.05`, ±$5/day locks, `MaxConsecLossesDay=2`. Still requires a
 forward demo pass before real money — backtests can overfit.
 
+### Direction isolation test (2026.10.21) — reports `GB_pb_sell.htm`, `GB_pb_both.htm`
+
+| Variant | Trades | PF | Net | Max DD |
+|---|---|---|---|---|
+| **Sells only** (`AllowBuys=0`) | 74 | **0.76** | **−$27.39** | dead (100%) |
+| Both directions (`AllowSells=1`) | 376 | 1.24 | +$122.44 | 29.9% |
+| Buys only (reference) | 220 | 1.40 | +$120.58 | 17.2% |
+
+The short leg is definitively negative: −$27.39 standalone, and adding it
+to the buys raised net only +$1.86 while nearly doubling max drawdown
+(17%→30%) and cutting per-trade expectancy $0.55→$0.33. **Buys-only
+remains the config.** (Note: first `GB_pb_both.htm` run was a config
+misfire — `AllowSells` unset defaulted to buys-only; reran correctly.)
+
 ## Strategy B on gold — R1000 (~$55) account, year sim
 
 `XAUUSD.0` M15, `FixedLot=0.01`, `MoneySL_USD=5.5`/`MoneyTP_USD=5.5`
