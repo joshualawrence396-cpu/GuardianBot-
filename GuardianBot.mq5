@@ -49,7 +49,7 @@ input group "=== Strategy A: trendline break ==="
 input int    BuyConfirmCandles   = 2;       // Bullish confirmations after break
 input int    SellConfirmCandles  = 3;       // Bearish confirmations after break
 input bool   AllowBuys           = true;
-input bool   AllowSells          = false;   // V75 longs outperformed shorts in year test
+input bool   AllowSells          = true;    // Mixed + BE0.75R netted +$141 vs buys-only +$128
 input bool   UseManualLines      = false;   // Use manually drawn OBJ_TREND lines
 input int    SwingStrength       = 3;       // Fractal strength (bars each side)
 input int    Lookback            = 120;     // Bars to search for swings
@@ -104,7 +104,7 @@ input group "=== Shared risk & execution ==="
 input int    SLBufferPoints   = 50;         // SL buffer beyond setup extreme (points)
 input double RiskReward       = 2.0;        // TP = RiskReward x risk
 input double SellRiskReward   = 0;          // Sell TP ratio (0 = use RiskReward)
-input double BreakevenAtR     = 1.0;        // Move SL to entry at this R (0 = off)
+input double BreakevenAtR     = 0.75;       // Move SL to entry at this R (0 = off); 0.75R won the sweep
 input double SellBreakevenAtR = -1;         // Sell BE trigger (-1 = use BreakevenAtR)
 input int    MaxTradesPerDay  = 5;          // Daily EA entry cap (0 = unlimited)
 input int    MaxSpreadPoints  = 0;          // Max spread in points (0 = off)
