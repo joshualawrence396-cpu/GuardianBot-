@@ -200,6 +200,26 @@ to the buys raised net only +$1.86 while nearly doubling max drawdown
 remains the config.** (Note: first `GB_pb_both.htm` run was a config
 misfire — `AllowSells` unset defaulted to buys-only; reran correctly.)
 
+### Sell-side improvement attempts (2026.10.21) — new per-direction inputs
+
+Added sell-specific controls: `SellMinBodyPct`, `SellRSIMax`,
+`SellRiskReward`, `SellBreakevenAtR`. Tested on the mixed base (both
+directions, 50% buy body, RR2, ±$5 locks):
+
+| Variant | Trades | PF | Net | Max DD |
+|---|---|---|---|---|
+| Both (baseline) | 376 | 1.24 | +$122.44 | 29.9% |
+| Strict sells (body 70% + RSI<45) | 338 | 1.19 | +$99.32 | 29.7% |
+| Quick-exit shorts (RR1.5 + BE0.5R) | 411 | 1.18 | +$85.79 | 38.8% |
+| Strictest sells (body 70% + RSI<40) | 310 | 1.20 | +$100.87 | 28.7% |
+| **Buys only (reference)** | 220 | **1.40** | **+$120.58** | **17.2%** |
+
+**No sell-side filter rescues the short leg** — every mixed variant sits
+below the plain mixed run and far below buys-only. The shorts have
+negative edge on this dataset, period. The new inputs remain available
+for other symbols/regimes, but on V75 the answer is unchanged:
+`AllowSells=0`.
+
 ## Strategy B on gold — R1000 (~$55) account, year sim
 
 `XAUUSD.0` M15, `FixedLot=0.01`, `MoneySL_USD=5.5`/`MoneyTP_USD=5.5`

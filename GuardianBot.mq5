@@ -73,9 +73,11 @@ input bool   H1StructConfirm     = true;    // Require H1 HH/HL (buys) or LH/LL 
 input bool   PullbackEMA20       = true;    // EMA20 touch on TrendTF counts as pullback
 input bool   PullbackEMA50       = true;    // EMA50 touch on TrendTF also counts as pullback
 input double EntryMinBodyPct     = 50;      // Signal-candle body >= this %% of range (0 = any)
+input double SellMinBodyPct      = -1;      // Sell signal body %% (-1 = use EntryMinBodyPct)
 input bool   UseEngulfing        = true;    // Engulfing candle counts as entry trigger
 input bool   UseRSIConfirm       = false;   // RSI(14) must agree: buys >50, sells <50
 input int    RSIPeriod           = 14;      // RSI period on TrendTF
+input double SellRSIMax          = 0;       // Sells only when RSI(14) below this (0 = off)
 input double MoneySL_USD         = 0;       // Fixed risk per trade in deposit ccy (0 = structure SL)
 input double MoneyTP_USD         = 0;       // Fixed TP in deposit ccy (0 = RiskReward x SL)
 input double MilestoneStep       = 0;       // Balance milestone step for risk scaling (0 = off)
@@ -101,7 +103,9 @@ input int MinSweepPoints  = 20;             // Min sweep beyond level (points)
 input group "=== Shared risk & execution ==="
 input int    SLBufferPoints   = 50;         // SL buffer beyond setup extreme (points)
 input double RiskReward       = 2.0;        // TP = RiskReward x risk
+input double SellRiskReward   = 0;          // Sell TP ratio (0 = use RiskReward)
 input double BreakevenAtR     = 1.0;        // Move SL to entry at this R (0 = off)
+input double SellBreakevenAtR = -1;         // Sell BE trigger (-1 = use BreakevenAtR)
 input int    MaxTradesPerDay  = 5;          // Daily EA entry cap (0 = unlimited)
 input int    MaxSpreadPoints  = 0;          // Max spread in points (0 = off)
 input double RiskPercent      = 0;          // % equity risked per trade (0 = fixed lot)
@@ -663,7 +667,7 @@ int TodayConsecLosses()
 //+------------------------------------------------------------------+
 //| Shared entry path: all gates, then send order                    |
 //+------------------------------------------------------------------+
-bool TryEnter(const string sym, bool isBuy, double sl, string tag, double tpIn = -1)
+bool TryEnter(const string sym, bool isBuy, double sl, string tag, double tpIn = -1, double rrIn = 0)
   {
    //--- guardian lock
    if(g_dailyLock || g_weeklyLock)
@@ -721,9 +725,10 @@ bool TryEnter(const string sym, bool isBuy, double sl, string tag, double tpIn =
    sl = NormPrice(sym, sl);
    double risk = MathAbs(entry - sl);
    if(risk <= 0) { SetBlockReason("zero risk distance"); return false; }
+   double rr = rrIn > 0 ? rrIn : RiskReward;
    double tp = NormPrice(sym, tpIn > 0 ? tpIn
-                         : isBuy ? entry + RiskReward * risk
-                                 : entry - RiskReward * risk);
+                         : isBuy ? entry + rr * risk
+                                 : entry - rr * risk);
    if(!StopsValid(sym, isBuy, entry, sl, tp)) return false;
    //--- volume
    double vol;
@@ -864,7 +869,7 @@ int BEFind(ulong ticket)
 
 void ManageBreakeven()
   {
-   if(BreakevenAtR <= 0.0 && TrailStartR <= 0.0) return;
+   if(BreakevenAtR <= 0.0 && TrailStartR <= 0.0 && SellBreakevenAtR <= 0.0) return;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
      {
       ulong ticket = PositionGetTicket(i);
@@ -919,9 +924,11 @@ void ManageBreakeven()
                    ? SymbolInfoDouble(sym, SYMBOL_BID)
                    : SymbolInfoDouble(sym, SYMBOL_ASK);
 
-      //--- breakeven move (once)
-      if(!g_be[idx].done && BreakevenAtR > 0.0 &&
-         profitDist >= BreakevenAtR * g_be[idx].risk)
+      //--- breakeven move (once); sells may use their own trigger
+      double beR = (type == POSITION_TYPE_SELL && SellBreakevenAtR >= 0.0)
+                   ? SellBreakevenAtR : BreakevenAtR;
+      if(!g_be[idx].done && beR > 0.0 &&
+         profitDist >= beR * g_be[idx].risk)
         {
          // never increase risk: SL moves only toward/past entry
          bool improves = (type == POSITION_TYPE_BUY) ? (open > sl || sl == 0.0)
@@ -1273,13 +1280,16 @@ void StrategyPullback()
       up = up && sUp; dn = dn && sDn;
       if(!up && !dn) { SetBlockReason("strategy C: no H1 structure confirm"); return; }
      }
-   if(UseRSIConfirm && (up || dn))
+   if((UseRSIConfirm || SellRSIMax > 0) && (up || dn))
      {
       double rsi[]; ArraySetAsSeries(rsi, true);
       if(CopyBuffer(g_rsi, 0, 1, 1, rsi) != 1)
         { SetBlockReason("strategy C: RSI data unavailable"); return; }
-      up = up && rsi[0] > 50.0;
-      dn = dn && rsi[0] < 50.0;
+      if(UseRSIConfirm) up = up && rsi[0] > 50.0;
+      double dnCap = 101.0;
+      if(UseRSIConfirm) dnCap = MathMin(dnCap, 50.0);
+      if(SellRSIMax > 0)  dnCap = MathMin(dnCap, SellRSIMax);
+      dn = dn && rsi[0] < dnCap;
       if(!up && !dn) { SetBlockReason("strategy C: RSI not confirming"); return; }
      }
 
@@ -1339,9 +1349,10 @@ void StrategyPullback()
    bool strongB = r[1].close > r[1].open &&
                   (EntryMinBodyPct <= 0 || range1 <= 0 ||
                    (r[1].close - r[1].open) >= range1 * EntryMinBodyPct / 100.0);
+   double sBody = SellMinBodyPct >= 0 ? SellMinBodyPct : EntryMinBodyPct;
    bool strongS = r[1].close < r[1].open &&
-                  (EntryMinBodyPct <= 0 || range1 <= 0 ||
-                   (r[1].open - r[1].close) >= range1 * EntryMinBodyPct / 100.0);
+                  (sBody <= 0 || range1 <= 0 ||
+                   (r[1].open - r[1].close) >= range1 * sBody / 100.0);
 
    //--- BUY: close back in trend direction above the EMA
    if(AllowBuys && up && pbBuy && (engB || (strongB && r[1].close > e20[0])) &&
@@ -1384,7 +1395,7 @@ void StrategyPullback()
          for(int s = 1; s <= sw; s++) hi = MathMax(hi, r[s].high);
          sl = hi + SLBufferPoints * pt;
         }
-      if(TryEnter(g_trendSymbol, false, sl, "GB_C_SELL", tp))
+      if(TryEnter(g_trendSymbol, false, sl, "GB_C_SELL", tp, SellRiskReward))
         { g_lastPbSellBar = r[1].time; GlobalVariableSet(g_gvSigPS, (double)g_lastPbSellBar); }
      }
 
@@ -1422,7 +1433,7 @@ void StrategyPullback()
                if(MoneyTP_USD > 0) tp = px - dist * (MoneyTP_USD / MoneySL_USD);
               }
             else sl = (BreakoutStopMidpoint ? mid : rh) + SLBufferPoints * pt;
-            if(TryEnter(g_trendSymbol, false, sl, "GB_C_BO_SELL", tp))
+            if(TryEnter(g_trendSymbol, false, sl, "GB_C_BO_SELL", tp, SellRiskReward))
               { g_lastPbSellBar = r[1].time; GlobalVariableSet(g_gvSigPS, (double)g_lastPbSellBar); }
            }
         }
@@ -1764,7 +1775,8 @@ int OnInit()
       SLBufferPoints < 0 || MinSweepPoints <= 0 ||
       DailyProfitTarget < 0 || WeeklyProfitTarget < 0 || DailyMaxLoss < 0 ||
       NewsMinsBefore < 0 || NewsMinsAfter < 0 ||
-      MoneySL_USD < 0 || MoneyTP_USD < 0 || MilestoneStep < 0 || MilestoneRiskUSD < 0)
+      MoneySL_USD < 0 || MoneyTP_USD < 0 || MilestoneStep < 0 || MilestoneRiskUSD < 0 ||
+      SellRiskReward < 0 || SellMinBodyPct < -1 || SellBreakevenAtR < -1 || SellRSIMax < 0)
      { Print("INIT FAIL: negative/invalid numeric input."); return INIT_PARAMETERS_INCORRECT; }
    if(BuyConfirmCandles < 1 || SellConfirmCandles < 1)
      { Print("INIT FAIL: confirmation candles must be >= 1."); return INIT_PARAMETERS_INCORRECT; }
@@ -1815,10 +1827,10 @@ int OnInit()
       g_emaH1    = iMA(g_trendSymbol, PERIOD_H1, H1EMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
       g_emaEntry = iMA(g_trendSymbol, TrendTF, EntryEMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
       g_ema50T   = iMA(g_trendSymbol, TrendTF, 50, 0, MODE_EMA, PRICE_CLOSE);
-      if(UseRSIConfirm)
+      if(UseRSIConfirm || SellRSIMax > 0)
          g_rsi = iRSI(g_trendSymbol, TrendTF, RSIPeriod, PRICE_CLOSE);
       if(g_emaH1 == INVALID_HANDLE || g_emaEntry == INVALID_HANDLE || g_ema50T == INVALID_HANDLE ||
-         (UseRSIConfirm && g_rsi == INVALID_HANDLE))
+         ((UseRSIConfirm || SellRSIMax > 0) && g_rsi == INVALID_HANDLE))
         { Print("INIT: pullback EMA handles failed on " + g_trendSymbol + " - Strategy C disabled."); g_trendActive = false; }
      }
    if(!g_trendActive && !g_goldActive)
