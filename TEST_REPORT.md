@@ -251,6 +251,24 @@ banks *more* net profit than buys-only (+$141 vs +$128) — but at lower
 PF and higher DD. Buys-only keeps the cleanest per-trade edge; mixed is
 the higher-yield/higher-variance option.
 
+### V75+gold merged on $150 (2026.10.22) — report `GB_combo150.htm`
+
+New gold-specific money stops: `MoneySLGold_USD=5.5`/`MoneyTPGold_USD=5.5`
+(R100/R100) so the V75 leg keeps its structure SL + BE 0.75R while gold
+keeps fixed-$ stops. Also fixed a latent bug: gold money-stop distance
+previously divided by `FixedLot` (0.05) instead of `FixedLotGold` (0.01),
+making gold stops 5× too tight — the earlier $110 combo ran with that.
+
+`PULLBACK_GOLD`, $150 deposit, full year:
+
+| Trades | PF | Net | Max DD | Sharpe |
+|---|---|---|---|---|
+| 409 (~half gold, ~half V75) | 0.99 | **−$4.82** | 47.8% | −0.23 |
+
+Same verdict as the $110 combo: **the gold leg drags the V75 edge to
+breakeven.** More capital didn't change the math — gold B alone was
+PF 0.60 and it remains a dilutive leg. V75-only configs stay superior.
+
 ## Strategy B on gold — R1000 (~$55) account, year sim
 
 `XAUUSD.0` M15, `FixedLot=0.01`, `MoneySL_USD=5.5`/`MoneyTP_USD=5.5`

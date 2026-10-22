@@ -80,6 +80,8 @@ input int    RSIPeriod           = 14;      // RSI period on TrendTF
 input double SellRSIMax          = 0;       // Sells only when RSI(14) below this (0 = off)
 input double MoneySL_USD         = 0;       // Fixed risk per trade in deposit ccy (0 = structure SL)
 input double MoneyTP_USD         = 0;       // Fixed TP in deposit ccy (0 = RiskReward x SL)
+input double MoneySLGold_USD     = 0;       // Gold-leg risk/trade (0 = use MoneySL_USD, -1 = structure SL)
+input double MoneyTPGold_USD     = 0;       // Gold-leg TP in ccy (0 = use MoneyTP_USD)
 input double MilestoneStep       = 0;       // Balance milestone step for risk scaling (0 = off)
 input double MilestoneRiskUSD    = 0;       // Risk $ per milestone step (needs MoneySL_USD>0)
 
@@ -1221,12 +1223,12 @@ void StrategyA()
 //+------------------------------------------------------------------+
 //| Money-based risk: flat or milestone-scaled fixed-$ risk          |
 //+------------------------------------------------------------------+
-double MoneyRiskUSD()
+double MoneyRiskUSD(double base)
   {
-   if(MoneySL_USD <= 0) return 0;
-   if(MilestoneStep <= 0 || MilestoneRiskUSD <= 0) return MoneySL_USD;
+   if(base <= 0) return 0;
+   if(MilestoneStep <= 0 || MilestoneRiskUSD <= 0) return base;
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
-   if(eq <= 0) return MoneySL_USD;
+   if(eq <= 0) return base;
    int steps = (int)MathFloor(eq / MilestoneStep);
    return MilestoneRiskUSD * MathMax(1, steps);
   }
@@ -1236,18 +1238,26 @@ double MoneyRiskUSD()
 //+------------------------------------------------------------------+
 bool MoneyStops(const string sym, bool isBuy, double &sl, double &tp)
   {
-   double riskUSD = MoneyRiskUSD();
+   double slUSD = MoneySL_USD, tpUSD = MoneyTP_USD;
+   if(g_goldActive && sym == g_goldSymbol)
+     {
+      if(MoneySLGold_USD != 0) slUSD = MoneySLGold_USD;   // -1 forces structure SL on gold
+      if(MoneyTPGold_USD != 0) tpUSD = MoneyTPGold_USD;
+     }
+   double riskUSD = MoneyRiskUSD(slUSD);
    if(riskUSD <= 0 || RiskPercent > 0) return false;
    double tv = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_VALUE);
    double ts = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_SIZE);
    double px = SymbolInfoDouble(sym, isBuy ? SYMBOL_BID : SYMBOL_ASK);
+   double lot = (g_goldActive && sym == g_goldSymbol && FixedLotGold > 0)
+                ? FixedLotGold : FixedLot;
    if(tv <= 0 || ts <= 0 || px <= 0) return false;
-   double dist = riskUSD * ts / (tv * FixedLot);
+   double dist = riskUSD * ts / (tv * lot);
    sl = isBuy ? px - dist : px + dist;
    tp = -1;
-   if(MoneyTP_USD > 0)
-      tp = isBuy ? px + dist * (MoneyTP_USD / MoneySL_USD)
-                 : px - dist * (MoneyTP_USD / MoneySL_USD);
+   if(tpUSD > 0)
+      tp = isBuy ? px + dist * (tpUSD / slUSD)
+                 : px - dist * (tpUSD / slUSD);
    return true;
   }
 
@@ -1328,7 +1338,7 @@ void StrategyPullback()
      }
 
    //--- optional money-based stop sizing (fixed $ or milestone-scaled)
-   double riskUSD = MoneyRiskUSD();
+   double riskUSD = MoneyRiskUSD(MoneySL_USD);
    double tv = 0, ts = 0;
    if(riskUSD > 0)
      {
@@ -1776,7 +1786,8 @@ int OnInit()
       DailyProfitTarget < 0 || WeeklyProfitTarget < 0 || DailyMaxLoss < 0 ||
       NewsMinsBefore < 0 || NewsMinsAfter < 0 ||
       MoneySL_USD < 0 || MoneyTP_USD < 0 || MilestoneStep < 0 || MilestoneRiskUSD < 0 ||
-      SellRiskReward < 0 || SellMinBodyPct < -1 || SellBreakevenAtR < -1 || SellRSIMax < 0)
+      SellRiskReward < 0 || SellMinBodyPct < -1 || SellBreakevenAtR < -1 || SellRSIMax < 0 ||
+      MoneySLGold_USD < -1 || MoneyTPGold_USD < 0)
      { Print("INIT FAIL: negative/invalid numeric input."); return INIT_PARAMETERS_INCORRECT; }
    if(BuyConfirmCandles < 1 || SellConfirmCandles < 1)
      { Print("INIT FAIL: confirmation candles must be >= 1."); return INIT_PARAMETERS_INCORRECT; }
