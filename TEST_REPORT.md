@@ -361,6 +361,28 @@ Best known config: **loose gates + RR 3.0** — `MinPullbackPoints=0`,
 (34.8% equity) of all gold variants. Still a thin sample (28 trades,
 21% win rate — winners carry it), so forward validation required.
 
+### Round 2 tuning on the combo (2026.10.22, $150)
+
+| Variant | Trades | PF | Net | Max Eq DD |
+|---|---|---|---|---|
+| **Combo (champion)** | 28 | 3.41 | **+$554.86** | 34.8% |
+| Buys only | 14 | 2.37 | +$146.95 | 21.4% |
+| Sells only | 15 | **4.36** | +$409.47 | 47.1% |
+| RR 4.0 | 10 | 0.00 | −$106.90 | 84% (dead) |
+| BE 1.0R (vs 0.75R) | 28 | 3.40 | +$553.96 | 34.8% |
+
+- **SELLS carry the gold edge** — opposite of V75 (where sells bled).
+  Gold rallied all year but the sweep-reversal shorts caught the deep
+  corrections inside bearish H4 structure: PF 4.36 alone, $409 of the
+  combo's $554. Buys are weaker but additive.
+- **RR3 is the ceiling**: RR4 → 0/10 winners. Targets beyond 3R
+  overreach the correction depth.
+- **BE timing is noise on gold**: 0.75R vs 1.0R statistically identical.
+- **Margin-floor warning**: on a $150 account the equity dips below
+  gold's ~$52 min margin mid-run (`not enough money` in the log),
+  skipping late-run trades. Realistic deployment wants ≥$500+ or the
+  DD is partly self-limiting anyway.
+
 ## Strategy B on gold — R1000 (~$55) account, year sim
 
 `XAUUSD.0` M15, `FixedLot=0.01`, `MoneySL_USD=5.5`/`MoneyTP_USD=5.5`
