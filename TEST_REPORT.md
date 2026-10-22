@@ -269,6 +269,22 @@ Same verdict as the $110 combo: **the gold leg drags the V75 edge to
 breakeven.** More capital didn't change the math — gold B alone was
 PF 0.60 and it remains a dilutive leg. V75-only configs stay superior.
 
+### Gold strategy improvement attempts (2026.10.22, gold-only, $150, full year)
+
+| Variant | Trades | PF | Net | Max DD |
+|---|---|---|---|---|
+| Structure SL + RR 2 | 143 | 0.80 | −$100.28 | 79.1% |
+| Structure SL + RR 1.5 | 127 | 0.78 | −$100.40 | 77.5% |
+| Money stops 1:2 ($5.50/$11) | 208 | 0.84 | −$99.82 | 76.7% |
+| Deep sweeps (200pt) + structure SL | 125 | 0.78 | −$100.65 | 69.7% |
+| Original money 1:1 (at $110) | 193 | 0.60 | −$61.81 | — |
+
+**Every stop-structure variant still loses.** Wider stops raised PF
+(0.60→0.84) but larger per-trade losses kept net ~−$100. The session-sweep
+signal on XAUUSD has no edge in this dataset — it's mean-reversion
+fighting a trending instrument. Fixing gold needs a different signal
+(e.g. trend-pullback continuation), not different stops.
+
 ## Strategy B on gold — R1000 (~$55) account, year sim
 
 `XAUUSD.0` M15, `FixedLot=0.01`, `MoneySL_USD=5.5`/`MoneyTP_USD=5.5`
