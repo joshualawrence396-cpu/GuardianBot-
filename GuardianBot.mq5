@@ -40,9 +40,9 @@ input ENUM_TIMEFRAMES    TrendTF        = PERIOD_M15;      // Entry timeframe (M
 input ENUM_TIMEFRAMES    GoldTF         = PERIOD_M15;      // Strategy B timeframe
 
 input group "=== Profit Guardian (account-wide, deposit currency) ==="
-input double DailyProfitTarget   = 5.0;     // Daily profit target (0 = disabled)
-input double WeeklyProfitTarget  = 15.0;    // Weekly profit target (0 = disabled)
-input double DailyMaxLoss        = 5.0;     // Daily max loss (0 = disabled)
+input double DailyProfitTarget   = 0;       // Daily profit target (0 = disabled)
+input double WeeklyProfitTarget  = 0;       // Weekly profit target (0 = disabled)
+input double DailyMaxLoss        = 10.0;    // Daily max loss (0 = disabled)
 input bool   GuardAllSymbols     = true;    // Lock enforcement scope: all symbols
 
 input group "=== Strategy A: trendline break ==="
