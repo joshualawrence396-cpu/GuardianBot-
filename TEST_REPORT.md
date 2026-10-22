@@ -330,6 +330,33 @@ aggressive — a single structure SL at 0.01 gold lots risks ~5-10% of a
 $150 account. Needs forward validation and/or risk-percent sizing
 before live use.
 
+### Strategy E improvement batch (2026.10.22, gold-only, $150)
+
+Four variants vs the base (reports `GB_ge_*.htm`):
+
+| Variant | Trades | PF | Net | Max Eq DD | Expectancy |
+|---|---|---|---|---|---|
+| Base (RR2, sessions 7-12/12-18) | 17 | 3.03 | +$270.54 | 47.7% | $15.91 |
+| Loose gates (tol $60, age 14H, sess 6-20) | 32 | 2.28 | +$322.45 | 54.6% | $10.08 |
+| **RiskReward 3.0** | 13 | **5.41** | **+$432.17** | 46.0% | **$33.24** |
+| RiskPercent=1 | 0 | — | $0 | — | — |
+| Strict (swing 3/3, 1 attempt) | — | — | stalled — killed | — | — |
+
+Findings:
+- **RR 3.0 is the best config**: PF 5.41, +$432, expectancy $33/trade.
+  Gold's winners run further than V75's — the extra R pays. But only 13
+  trades and 23% win rate: thin sample, few big winners drive it.
+- **Looser gates work**: 32 trades (+88% more opportunities) and higher
+  net (+$322 vs +$270), at the cost of lower PF and deeper drawdown.
+- **RiskPercent=1 is untradeable at $150**: 1% = $1.50 risk vs ~$30
+  structure-stop risk at the 0.01 min lot → EA skips every signal.
+  Percent sizing needs a ~$3k account or much tighter stops.
+- Strict variant stalled the sim (killed after 90+ min) — the strategy
+  is already selective; tightening further adds nothing to test.
+
+Best known config: RR3 + loose sessions (worth testing combined:
+loose + RR3).
+
 ## Strategy B on gold — R1000 (~$55) account, year sim
 
 `XAUUSD.0` M15, `FixedLot=0.01`, `MoneySL_USD=5.5`/`MoneyTP_USD=5.5`
