@@ -120,6 +120,7 @@ input double PyramidMinProfitR= 1.0;        // Min open profit (x initial risk) 
 input int    TradeStartHour   = 0;          // Trading window start (0-23)
 input int    TradeEndHour     = 24;         // Trading window end (1-24)
 input long   Magic            = 777002;     // EA magic number
+input bool   LogTradeData     = true;       // Append trade dataset rows to Files/GB_forward.csv
 
 input group "=== News filter (gold only, MT5 calendar) ==="
 input bool   UseNewsFilterGold   = true;    // Enable news gate for gold entries
@@ -197,6 +198,22 @@ struct BEInfo
    bool    done;      // breakeven already applied
   };
 BEInfo g_be[];
+
+//--- forward-test dataset: per-position tracking for MFE/MAE
+struct PosTrack
+  {
+   ulong   ticket;
+   string  sym;
+   string  tag;
+   long    type;
+   double  lots;
+   double  open;
+   double  risk;
+   double  mfe;
+   double  mae;
+   string  ctx;
+  };
+PosTrack g_track[];
 
 //--- log throttling
 struct ThrottleEntry
@@ -669,7 +686,7 @@ int TodayConsecLosses()
 //+------------------------------------------------------------------+
 //| Shared entry path: all gates, then send order                    |
 //+------------------------------------------------------------------+
-bool TryEnter(const string sym, bool isBuy, double sl, string tag, double tpIn = -1, double rrIn = 0)
+bool TryEnter(const string sym, bool isBuy, double sl, string tag, double tpIn = -1, double rrIn = 0, const string ctx = "")
   {
    //--- guardian lock
    if(g_dailyLock || g_weeklyLock)
@@ -745,6 +762,15 @@ bool TryEnter(const string sym, bool isBuy, double sl, string tag, double tpIn =
                SymDigits(sym), tp, rc, trade.ResultRetcodeDescription());
    if(!sent || (rc != TRADE_RETCODE_DONE && rc != TRADE_RETCODE_PLACED))
      { SetBlockReason(StringFormat("order rejected rc=%d", rc)); return false; }
+
+   ulong posId = 0;
+   if(HistoryDealSelect(trade.ResultDeal()))
+      posId = (ulong)HistoryDealGetInteger(trade.ResultDeal(), DEAL_POSITION_ID);
+   TrackRegister(posId, sym, isBuy, entry, sl, risk, vol, tag, ctx);
+   LogData(Row("ENTRY", posId, sym, tag, isBuy ? "buy" : "sell",
+               DoubleToString(vol, 3), DoubleToString(entry, SymDigits(sym)),
+               DoubleToString(sl, SymDigits(sym)), DoubleToString(tp, SymDigits(sym)),
+               DoubleToString(risk, 2), "", "", "", "", ctx));
    return true;
   }
 
@@ -946,6 +972,11 @@ void ManageBreakeven()
                PrintFormat("Breakeven: ticket=%I64u SL->entry %.*f", ticket, SymDigits(sym), open);
                g_be[idx].done = true;
                GlobalVariableSet(GVBEDone(ticket), 1.0);
+               int ti = TrackFind(ticket);
+               LogData(Row("BE", ticket, sym, ti >= 0 ? g_track[ti].tag : "",
+                           type == POSITION_TYPE_BUY ? "buy" : "sell", "", "",
+                           DoubleToString(open, SymDigits(sym)), "", "", "", "", "",
+                           "be", ""));
               }
             else
                LogT("be_fail_" + (string)ticket,
@@ -1324,17 +1355,18 @@ void StrategyPullback()
 
    //--- pullback detection: price touched EMA within last PullbackBars, or retested S/R
    bool pbBuy = false, pbSell = false;
+   string pbSrcB = "", pbSrcS = "";
    for(int s = 1; s <= pb; s++)
      {
-      if((PullbackEMA20 && r[s].low  <= e20[s - 1]) ||
-         (PullbackEMA50 && r[s].low  <= e50t[s - 1])) pbBuy  = true;
-      if((PullbackEMA20 && r[s].high >= e20[s - 1]) ||
-         (PullbackEMA50 && r[s].high >= e50t[s - 1])) pbSell = true;
+      if(PullbackEMA20 && r[s].low  <= e20[s - 1])  { pbBuy  = true; pbSrcB += "e20|"; }
+      if(PullbackEMA50 && r[s].low  <= e50t[s - 1]) { pbBuy  = true; pbSrcB += "e50|"; }
+      if(PullbackEMA20 && r[s].high >= e20[s - 1])  { pbSell = true; pbSrcS += "e20|"; }
+      if(PullbackEMA50 && r[s].high >= e50t[s - 1]) { pbSell = true; pbSrcS += "e50|"; }
      }
    if(UseSRRetest)
      {
-      if(r[1].low  <= srHigh && r[1].low  >= srLow) pbBuy  = true;
-      if(r[1].high >= srLow  && r[1].high <= srHigh) pbSell = true;
+      if(r[1].low  <= srHigh && r[1].low  >= srLow)  { pbBuy  = true; pbSrcB += "sr|"; }
+      if(r[1].high >= srLow  && r[1].high <= srHigh) { pbSell = true; pbSrcS += "sr|"; }
      }
 
    //--- optional money-based stop sizing (fixed $ or milestone-scaled)
@@ -1383,7 +1415,9 @@ void StrategyPullback()
          for(int s = 1; s <= sw; s++) lo = MathMin(lo, r[s].low);
          sl = lo - SLBufferPoints * pt;
         }
-      if(TryEnter(g_trendSymbol, true, sl, "GB_C_BUY", tp))
+      string ctxB = StringFormat("h1=up;pb=%s;trig=%s;body=%d",
+                      pbSrcB, engB ? "eng" : "strong", (int)EntryMinBodyPct);
+      if(TryEnter(g_trendSymbol, true, sl, "GB_C_BUY", tp, 0, ctxB))
         { g_lastPbBuyBar = r[1].time; GlobalVariableSet(g_gvSigPB, (double)g_lastPbBuyBar); }
      }
    //--- SELL: mirror
@@ -1405,7 +1439,9 @@ void StrategyPullback()
          for(int s = 1; s <= sw; s++) hi = MathMax(hi, r[s].high);
          sl = hi + SLBufferPoints * pt;
         }
-      if(TryEnter(g_trendSymbol, false, sl, "GB_C_SELL", tp, SellRiskReward))
+      string ctxS = StringFormat("h1=dn;pb=%s;trig=%s;body=%d",
+                      pbSrcS, engS ? "eng" : "strong", (int)sBody);
+      if(TryEnter(g_trendSymbol, false, sl, "GB_C_SELL", tp, SellRiskReward, ctxS))
         { g_lastPbSellBar = r[1].time; GlobalVariableSet(g_gvSigPS, (double)g_lastPbSellBar); }
      }
 
@@ -1886,9 +1922,149 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 //| Core monitoring pass (called from OnTick and OnTimer)            |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Forward-test dataset: GB_forward.csv rows                        |
+//+------------------------------------------------------------------+
+void LogData(const string line)
+  {
+   if(!LogTradeData) return;
+   int h = FileOpen("GB_forward.csv", FILE_READ|FILE_WRITE|FILE_TXT|FILE_ANSI);
+   if(h == INVALID_HANDLE)
+     { LogT("csv_open", "GB_forward.csv open failed err=" + (string)GetLastError()); return; }
+   if(FileSize(h) == 0)
+      FileWriteString(h, "time;event;posid;sym;tag;dir;lots;open;sl;tp;risk;mfe;mae;profit;reason;ctx\r\n");
+   FileSeek(h, 0, SEEK_END);
+   FileWriteString(h, line + "\r\n");
+   FileClose(h);
+  }
+
+string Row(const string ev, const ulong posId, const string sym, const string tag,
+           const string dir, const string lots, const string open, const string sl,
+           const string tp, const string risk, const string mfe, const string mae,
+           const string profit, const string reason, const string ctx)
+  {
+   return StringFormat("%s;%s;%I64u;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s",
+      TimeToString(ServerTime(), TIME_DATE|TIME_SECONDS), ev, posId, sym, tag,
+      dir, lots, open, sl, tp, risk, mfe, mae, profit, reason, ctx);
+  }
+
+int TrackFind(const ulong ticket)
+  {
+   for(int i = 0; i < ArraySize(g_track); i++)
+      if(g_track[i].ticket == ticket) return i;
+   return -1;
+  }
+
+void TrackRegister(const ulong posId, const string sym, const bool isBuy,
+                   const double open, const double sl, const double risk,
+                   const double lots, const string tag, const string ctx)
+  {
+   if(!LogTradeData || posId == 0) return;
+   int i = TrackFind(posId);
+   if(i < 0) { i = ArraySize(g_track); ArrayResize(g_track, i + 1); }
+   g_track[i].ticket = posId;
+   g_track[i].sym    = sym;
+   g_track[i].tag    = tag;
+   g_track[i].type   = isBuy ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+   g_track[i].lots   = lots;
+   g_track[i].open   = open;
+   g_track[i].risk   = risk;
+   g_track[i].mfe    = 0;
+   g_track[i].mae    = 0;
+   g_track[i].ctx    = ctx;
+  }
+
+void TrackRemove(const int idx)
+  {
+   int n = ArraySize(g_track);
+   for(int j = idx; j < n - 1; j++) g_track[j] = g_track[j + 1];
+   ArrayResize(g_track, n - 1);
+  }
+
+//--- per-tick MFE/MAE update; also re-tracks positions after an EA restart
+void TrackUpdate()
+  {
+   if(!LogTradeData) return;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0 || PositionGetInteger(POSITION_MAGIC) != Magic) continue;
+      string sym = PositionGetString(POSITION_SYMBOL);
+      if(sym != g_trendSymbol && sym != g_goldSymbol) continue;
+      int idx = TrackFind(ticket);
+      double open = PositionGetDouble(POSITION_PRICE_OPEN);
+      long   type = PositionGetInteger(POSITION_TYPE);
+      if(idx < 0)
+        {
+         idx = ArraySize(g_track); ArrayResize(g_track, idx + 1);
+         g_track[idx].ticket = ticket;
+         g_track[idx].sym    = sym;
+         g_track[idx].tag    = "";
+         g_track[idx].type   = type;
+         g_track[idx].lots   = PositionGetDouble(POSITION_VOLUME);
+         g_track[idx].open   = open;
+         double sl0          = PositionGetDouble(POSITION_SL);
+         g_track[idx].risk   = sl0 > 0 ? MathAbs(open - sl0) : 0;
+         g_track[idx].mfe    = 0;
+         g_track[idx].mae    = 0;
+         g_track[idx].ctx    = "";
+        }
+      double px = (type == POSITION_TYPE_BUY)
+                  ? SymbolInfoDouble(sym, SYMBOL_BID)
+                  : SymbolInfoDouble(sym, SYMBOL_ASK);
+      double d = (type == POSITION_TYPE_BUY) ? px - open : open - px;
+      if(d > g_track[idx].mfe)  g_track[idx].mfe = d;
+      if(-d > g_track[idx].mae) g_track[idx].mae = -d;
+     }
+  }
+
+void OnTradeTransaction(const MqlTradeTransaction &trans,
+                        const MqlTradeRequest &req,
+                        const MqlTradeResult &res)
+  {
+   if(!LogTradeData || trans.type != TRADE_TRANSACTION_DEAL_ADD) return;
+   if(!HistoryDealSelect(trans.deal)) return;
+   if(HistoryDealGetInteger(trans.deal, DEAL_MAGIC) != Magic) return;
+   long entryType = HistoryDealGetInteger(trans.deal, DEAL_ENTRY);
+   if(entryType != DEAL_ENTRY_OUT && entryType != DEAL_ENTRY_INOUT) return;
+
+   ulong  posId  = (ulong)HistoryDealGetInteger(trans.deal, DEAL_POSITION_ID);
+   string sym    = HistoryDealGetString(trans.deal, DEAL_SYMBOL);
+   long   type   = HistoryDealGetInteger(trans.deal, DEAL_TYPE);
+   double profit = HistoryDealGetDouble(trans.deal, DEAL_PROFIT)
+                 + HistoryDealGetDouble(trans.deal, DEAL_SWAP)
+                 + HistoryDealGetDouble(trans.deal, DEAL_COMMISSION);
+   double px     = HistoryDealGetDouble(trans.deal, DEAL_PRICE);
+   long   rsn    = HistoryDealGetInteger(trans.deal, DEAL_REASON);
+   string reason = (rsn == DEAL_REASON_TP) ? "tp" :
+                   (rsn == DEAL_REASON_SL) ? "sl" :
+                   (rsn == DEAL_REASON_SO) ? "so" :
+                   (rsn == DEAL_REASON_EXPERT) ? "ea" : (string)rsn;
+
+   int idx = TrackFind(posId);
+   string tag = "", dir = "", lots = "", risk = "", mfe = "", mae = "", ctx = "";
+   if(idx >= 0)
+     {
+      tag  = g_track[idx].tag;  dir  = g_track[idx].type == POSITION_TYPE_BUY ? "buy" : "sell";
+      lots = DoubleToString(g_track[idx].lots, 3);
+      risk = DoubleToString(g_track[idx].risk, 2);
+      mfe  = DoubleToString(g_track[idx].mfe, 2);
+      mae  = DoubleToString(g_track[idx].mae, 2);
+      ctx  = g_track[idx].ctx;
+     }
+   else dir = (type == DEAL_TYPE_SELL) ? "buy" : "sell";   // closing deal type is opposite
+
+   LogData(Row("EXIT", posId, sym, tag, dir, lots,
+               DoubleToString(px, SymDigits(sym)), "", "",
+               risk, mfe, mae, DoubleToString(profit, 2), reason, ctx));
+   if(idx >= 0) TrackRemove(idx);
+  }
+
+//+------------------------------------------------------------------+
 void Monitor()
   {
    GuardianUpdate();
+   TrackUpdate();
    GuardianEnforce();
    NewsUpdate();
    ManageBreakeven();
