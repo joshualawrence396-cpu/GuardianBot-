@@ -117,6 +117,13 @@ input double TrailStartR      = 0;          // Trail SL once profit >= this x ri
 input double TrailDistR       = 0.5;        // Trail distance behind price (x risk)
 input bool   PyramidEnabled   = false;      // Allow add-on entry when position is in profit
 input double PyramidMinProfitR= 1.0;        // Min open profit (x initial risk) to pyramid
+input double PartialClosePct  = 0;          // Close this %% of position at PartialAtR (0 = off)
+input double PartialAtR       = 1.5;        // Profit level (x risk) to take the partial
+input double RunnerTrailR     = 0;          // Trail remainder at this distance x risk (0 = keep TP)
+input double EquityPerLotStep = 0;          // Lot x floor(equity/this) for auto-scaling (0 = fixed)
+input bool   UseADXFilter     = false;      // Require H1 ADX >= ADXMin + DI alignment
+input int    ADXPeriod        = 14;         // ADX period on H1
+input double ADXMin           = 20;         // Minimum ADX for entries
 input int    TradeStartHour   = 0;          // Trading window start (0-23)
 input int    TradeEndHour     = 24;         // Trading window end (1-24)
 input long   Magic            = 777002;     // EA magic number
@@ -154,6 +161,7 @@ int      g_emaH1        = INVALID_HANDLE;   // Strategy C trend filter
 int      g_emaEntry     = INVALID_HANDLE;   // Strategy C pullback EMA
 int      g_ema50T       = INVALID_HANDLE;   // Strategy C EMA50 on TrendTF
 int      g_rsi          = INVALID_HANDLE;   // Strategy C RSI on TrendTF
+int      g_adx          = INVALID_HANDLE;   // H1 ADX trend-strength filter
 
 //--- signal dedupe (per signal candle time)
 datetime g_lastBuyBreakBar  = 0;
@@ -196,6 +204,7 @@ struct BEInfo
    ulong   ticket;
    double  risk;      // initial |entry - SL| in price
    bool    done;      // breakeven already applied
+   bool    partial;   // partial close already taken
   };
 BEInfo g_be[];
 
@@ -602,6 +611,11 @@ bool CalcVolume(const string sym, double entry, double sl, double &vol)
      {
       double fl = (g_goldActive && sym == g_goldSymbol && FixedLotGold > 0)
                   ? FixedLotGold : FixedLot;
+      if(EquityPerLotStep > 0.0)
+        {
+         double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+         if(eq > 0) fl *= MathMax(1.0, MathFloor(eq / EquityPerLotStep));
+        }
       vol = FloorToStep(fl, vstep, vd);
       if(vol < vmin) { SetBlockReason("FixedLot below volume min"); return false; }
       if(vol > vmax) vol = FloorToStep(vmax, vstep, vd);
@@ -887,6 +901,7 @@ void ParseNewsCurrencies()
 //+------------------------------------------------------------------+
 string GVBEName(ulong ticket) { return StringFormat("GRD_%I64d_BER_%I64u", g_login, ticket); }
 string GVBEDone(ulong ticket) { return StringFormat("GRD_%I64d_BED_%I64u", g_login, ticket); }
+string GVPartial(ulong ticket) { return StringFormat("GRD_%I64d_PCL_%I64u", g_login, ticket); }
 
 int BEFind(ulong ticket)
   {
@@ -897,7 +912,8 @@ int BEFind(ulong ticket)
 
 void ManageBreakeven()
   {
-   if(BreakevenAtR <= 0.0 && TrailStartR <= 0.0 && SellBreakevenAtR <= 0.0) return;
+   if(BreakevenAtR <= 0.0 && TrailStartR <= 0.0 && SellBreakevenAtR <= 0.0 &&
+      PartialClosePct <= 0.0) return;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
      {
       ulong ticket = PositionGetTicket(i);
@@ -915,11 +931,13 @@ void ManageBreakeven()
          g_be[idx].ticket = ticket;
          g_be[idx].done   = false;
          g_be[idx].risk   = 0.0;
+         g_be[idx].partial = false;
          string rn = GVBEName(ticket);
          if(GlobalVariableCheck(rn))
            {
             g_be[idx].risk = GlobalVariableGet(rn);
             g_be[idx].done = (GlobalVariableCheck(GVBEDone(ticket)));
+            g_be[idx].partial = (GlobalVariableCheck(GVPartial(ticket)));
            }
          else
            {
@@ -986,12 +1004,47 @@ void ManageBreakeven()
            }
         }
 
-      //--- trailing stop (ratchets, never loosens)
-      if(TrailStartR > 0.0 && profitDist >= TrailStartR * g_be[idx].risk)
+      //--- runner mode: bank a partial at PartialAtR, let the rest ride
+      if(PartialClosePct > 0.0 && !g_be[idx].partial &&
+         profitDist >= PartialAtR * g_be[idx].risk)
+        {
+         double posVol = PositionGetDouble(POSITION_VOLUME);
+         double vmin   = SymbolInfoDouble(sym, SYMBOL_VOLUME_MIN);
+         double vstep  = SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP);
+         double closeVol = FloorToStep(posVol * PartialClosePct / 100.0, vstep,
+                                       VolumeDigits(vstep));
+         if(closeVol >= vmin && posVol - closeVol >= vmin)
+           {
+            trade.SetTypeFillingBySymbol(sym);
+            if(trade.PositionClosePartial(ticket, closeVol))
+              {
+               PrintFormat("Runner: ticket=%I64u closed %.*f lots at %.1fR",
+                           ticket, VolumeDigits(vstep), closeVol, PartialAtR);
+               g_be[idx].partial = true;
+               GlobalVariableSet(GVPartial(ticket), 1.0);
+               // runner keeps no fixed TP when trailing is requested
+               if(RunnerTrailR > 0.0 && tp != 0.0)
+                  trade.PositionModify(ticket, sl, 0.0);
+              }
+            else
+               LogT("pc_fail_" + (string)ticket,
+                    StringFormat("Partial close failed ticket=%I64u rc=%d %s",
+                                 ticket, trade.ResultRetcode(),
+                                 trade.ResultRetcodeDescription()));
+           }
+         else g_be[idx].partial = true;   // can't split further - don't retry
+        }
+
+      //--- trailing stop (ratchets, never loosens); RunnerTrailR trails post-partial
+      double trStart = TrailStartR;
+      double trDist  = TrailDistR;
+      if(g_be[idx].partial && RunnerTrailR > 0.0) { trStart = -1.0; trDist = RunnerTrailR; }
+      if(trStart > 0.0 || trStart == -1.0)
+      if((trStart < 0.0 || profitDist >= trStart * g_be[idx].risk) && trDist > 0.0)
         {
          double tsl = (type == POSITION_TYPE_BUY)
-                      ? NormPrice(sym, cur - TrailDistR * g_be[idx].risk)
-                      : NormPrice(sym, cur + TrailDistR * g_be[idx].risk);
+                      ? NormPrice(sym, cur - trDist * g_be[idx].risk)
+                      : NormPrice(sym, cur + trDist * g_be[idx].risk);
          bool better = (type == POSITION_TYPE_BUY) ? (sl == 0.0 || tsl > sl)
                                                    : (sl == 0.0 || tsl < sl);
          // keep SL at least minDist away from current price
@@ -1332,6 +1385,18 @@ void StrategyPullback()
       if(SellRSIMax > 0)  dnCap = MathMin(dnCap, SellRSIMax);
       dn = dn && rsi[0] < dnCap;
       if(!up && !dn) { SetBlockReason("strategy C: RSI not confirming"); return; }
+     }
+   if(UseADXFilter && (up || dn))
+     {
+      double adx[], pdi[], mdi[];
+      ArraySetAsSeries(adx, true); ArraySetAsSeries(pdi, true); ArraySetAsSeries(mdi, true);
+      if(CopyBuffer(g_adx, 0, 1, 1, adx) != 1 ||
+         CopyBuffer(g_adx, 1, 1, 1, pdi) != 1 ||
+         CopyBuffer(g_adx, 2, 1, 1, mdi) != 1)
+        { SetBlockReason("strategy C: ADX data unavailable"); return; }
+      up = up && adx[0] >= ADXMin && pdi[0] > mdi[0];
+      dn = dn && adx[0] >= ADXMin && mdi[0] > pdi[0];
+      if(!up && !dn) { SetBlockReason("strategy C: ADX trend too weak"); return; }
      }
 
    //--- entry EMA buffer on TrendTF
@@ -1823,7 +1888,9 @@ int OnInit()
       NewsMinsBefore < 0 || NewsMinsAfter < 0 ||
       MoneySL_USD < 0 || MoneyTP_USD < 0 || MilestoneStep < 0 || MilestoneRiskUSD < 0 ||
       SellRiskReward < 0 || SellMinBodyPct < -1 || SellBreakevenAtR < -1 || SellRSIMax < 0 ||
-      MoneySLGold_USD < -1 || MoneyTPGold_USD < 0)
+      MoneySLGold_USD < -1 || MoneyTPGold_USD < 0 ||
+      PartialClosePct < 0 || PartialClosePct > 100 || PartialAtR < 0 ||
+      RunnerTrailR < 0 || EquityPerLotStep < 0 || ADXPeriod < 1 || ADXMin < 0)
      { Print("INIT FAIL: negative/invalid numeric input."); return INIT_PARAMETERS_INCORRECT; }
    if(BuyConfirmCandles < 1 || SellConfirmCandles < 1)
      { Print("INIT FAIL: confirmation candles must be >= 1."); return INIT_PARAMETERS_INCORRECT; }
@@ -1876,8 +1943,11 @@ int OnInit()
       g_ema50T   = iMA(g_trendSymbol, TrendTF, 50, 0, MODE_EMA, PRICE_CLOSE);
       if(UseRSIConfirm || SellRSIMax > 0)
          g_rsi = iRSI(g_trendSymbol, TrendTF, RSIPeriod, PRICE_CLOSE);
+      if(UseADXFilter)
+         g_adx = iADX(g_trendSymbol, PERIOD_H1, ADXPeriod);
       if(g_emaH1 == INVALID_HANDLE || g_emaEntry == INVALID_HANDLE || g_ema50T == INVALID_HANDLE ||
-         ((UseRSIConfirm || SellRSIMax > 0) && g_rsi == INVALID_HANDLE))
+         ((UseRSIConfirm || SellRSIMax > 0) && g_rsi == INVALID_HANDLE) ||
+         (UseADXFilter && g_adx == INVALID_HANDLE))
         { Print("INIT: pullback EMA handles failed on " + g_trendSymbol + " - Strategy C disabled."); g_trendActive = false; }
      }
    if(!g_trendActive && !g_goldActive)
@@ -1915,6 +1985,7 @@ void OnDeinit(const int reason)
    if(g_emaEntry != INVALID_HANDLE) IndicatorRelease(g_emaEntry);
    if(g_ema50T != INVALID_HANDLE) IndicatorRelease(g_ema50T);
    if(g_rsi != INVALID_HANDLE) IndicatorRelease(g_rsi);
+   if(g_adx != INVALID_HANDLE) IndicatorRelease(g_adx);
    Comment("");
    Print("GuardianBot deinit, reason=", reason);
   }

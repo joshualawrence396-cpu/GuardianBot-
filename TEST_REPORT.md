@@ -285,6 +285,26 @@ signal on XAUUSD has no edge in this dataset — it's mean-reversion
 fighting a trending instrument. Fixing gold needs a different signal
 (e.g. trend-pullback continuation), not different stops.
 
+### "Longer trades / leverage / quality" upgrade batch (2026.10.22, mixed + BE0.75R, $150)
+
+Three new EA features, each tested against a fresh $150 mixed baseline
+(reports `GB_u_*.htm`):
+
+| Variant | Trades | PF | Net | Max DD |
+|---|---|---|---|---|
+| **Base (fixed 0.05 lot, 2R TP)** | 386 | **1.31** | **+$141.16** | 14.9% |
+| Runner mode (close 50% @1.5R, trail 1R) | 400 | 1.27 | +$128.84 | 16.4% |
+| Equity-scaled lots (0.05 per $75) | 312 | 1.09 | +$55.50 | 29.1% |
+| ADX≥20 + DI filter on H1 | 351 | 1.15 | +$69.98 | 22.4% |
+
+New inputs added: `PartialClosePct`/`PartialAtR`/`RunnerTrailR` (runner
+mode), `EquityPerLotStep` (lot auto-scaling), `UseADXFilter`/`ADXPeriod`/
+`ADXMin` (H1 trend-strength gate). All work — but all underperform the
+base on this dataset. Runner mode banks less than the 2R TP it
+replaces; aggressive lot scaling doubles risk without doubling edge;
+ADX re-filters what the structure gate already handles. The simple
+config remains the local optimum after ~20 variants.
+
 ## Strategy B on gold — R1000 (~$55) account, year sim
 
 `XAUUSD.0` M15, `FixedLot=0.01`, `MoneySL_USD=5.5`/`MoneyTP_USD=5.5`
