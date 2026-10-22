@@ -305,6 +305,31 @@ replaces; aggressive lot scaling doubles risk without doubling edge;
 ADX re-filters what the structure gate already handles. The simple
 config remains the local optimum after ~20 variants.
 
+### Strategy E: gold structure sweep (2026.10.22, gold-only, $150)
+
+New mode `GOLD_STRUCT` (6): 4H structure bias on XAUUSD + 1H liquidity
+sweep near the H1 zone + M5 minor-structure BOS confirmation, traded
+only inside London (07-12) and New York (12-18) server windows, max 2
+attempts per session, structure SL beyond the sweep extreme, 2R.
+See `GB_goldstruct.htm`.
+
+| Metric | Value |
+|---|---|
+| Trades | 17 |
+| PF | **3.03** |
+| Net | **+$270.54** |
+| Win rate | 23.5% (4/17) |
+| Max DD | $72.74 / 47.7% |
+| Expectancy | $15.91/trade |
+
+First gold variant with positive edge — the MTF selectivity (H4 trend +
+sweep + BOS + session filter) is doing real work: only 17 setups in a
+year passed the gates, but they were high-quality. Caveats: 17 trades
+is a thin sample (PF could be partly luck), and 47% drawdown on $150 is
+aggressive — a single structure SL at 0.01 gold lots risks ~5-10% of a
+$150 account. Needs forward validation and/or risk-percent sizing
+before live use.
+
 ## Strategy B on gold — R1000 (~$55) account, year sim
 
 `XAUUSD.0` M15, `FixedLot=0.01`, `MoneySL_USD=5.5`/`MoneyTP_USD=5.5`
