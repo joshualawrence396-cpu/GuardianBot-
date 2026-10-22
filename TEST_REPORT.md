@@ -341,6 +341,7 @@ Four variants vs the base (reports `GB_ge_*.htm`):
 | **RiskReward 3.0** | 13 | **5.41** | **+$432.17** | 46.0% | **$33.24** |
 | RiskPercent=1 | 0 | — | $0 | — | — |
 | Strict (swing 3/3, 1 attempt) | — | — | stalled — killed | — | — |
+| **Loose + RR3 combo** | 28 | **3.41** | **+$554.86** | **34.8%** | $19.82 |
 
 Findings:
 - **RR 3.0 is the best config**: PF 5.41, +$432, expectancy $33/trade.
@@ -354,8 +355,11 @@ Findings:
 - Strict variant stalled the sim (killed after 90+ min) — the strategy
   is already selective; tightening further adds nothing to test.
 
-Best known config: RR3 + loose sessions (worth testing combined:
-loose + RR3).
+Best known config: **loose gates + RR 3.0** — `MinPullbackPoints=0`,
+`ZoneTolerancePoints=6000`, `SweepMaxAge=14`, sessions 6-13/13-20,
+`RiskReward=3.0`. Highest net (+$554.86 on $150) AND lowest drawdown
+(34.8% equity) of all gold variants. Still a thin sample (28 trades,
+21% win rate — winners carry it), so forward validation required.
 
 ## Strategy B on gold — R1000 (~$55) account, year sim
 
