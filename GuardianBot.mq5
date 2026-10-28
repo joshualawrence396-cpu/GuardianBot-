@@ -27,7 +27,8 @@ enum ENUM_STRATEGY_MODE
    PULLBACK      = 3,   // Strategy C: H1 trend + TrendTF pullback (V75)
    STRUCTURE     = 4,   // Strategy D: H4 bias + zone + sweep + BOS (V75)
    PULLBACK_GOLD = 5,   // Strategy C on trend leg + Strategy B on gold
-   GOLD_STRUCT   = 6    // Strategy E: H4 bias + H1 sweep + M5 BOS (gold)
+   GOLD_STRUCT   = 6,   // Strategy E: H4 bias + H1 sweep + M5 BOS (gold)
+   FIB_PD        = 7    // Strategy F: prev-day H/L fib retracement (multi-symbol)
   };
 
 //+------------------------------------------------------------------+
@@ -105,6 +106,20 @@ input int    GoldNYStartH   = 12;   // New York window start hour
 input int    GoldNYEndH     = 18;   // New York window end hour
 input int    MaxSessionAttempts = 2;// Max entries per session window (0 = off)
 input int    GSSwingStr     = 2;    // Fractal strength for the M5 minor-swing BOS
+
+input group "=== Strategy F: prev-day H/L fib retracement ==="
+input string FibSymbols        = "XAUUSD";  // Comma-separated symbols to scan
+input ENUM_TIMEFRAMES FibTF    = PERIOD_M5; // TF used to measure the morning range
+input int    FibRangeStartH    = 3;        // Morning range start hour (server time)
+input int    FibRangeEndH      = 9;        // Morning range end hour
+input int    FibEntryEndH      = 16;       // No new entries after this hour
+input bool   FibRequireSweep   = true;     // Range must sweep PDH (buy) / PDL (sell)
+input double FibZoneLo         = 0.382;    // Retracement zone lower bound
+input double FibZoneHi         = 0.5;      // Retracement zone upper bound
+input double FibTPExt          = 1.618;    // TP fib extension
+input int    FibSLMode         = 0;        // 0 = beyond PD level, 1 = beyond zone edge
+input int    FibMaxTradesDay   = 1;        // Max fib entries per symbol per day (0 = off)
+input double FibFixedLot       = 0.01;     // Lot for FIB_PD symbols when RiskPercent = 0
 
 input group "=== Strategy B: session sweep (server-time hours) ==="
 input int AsianStartHour  = 0;              // Asian session start (0-23)
@@ -219,6 +234,20 @@ bool     g_newsBlocked    = false;
 bool     g_volBlocked     = false;
 datetime g_spikeUntil     = 0;
 string   g_volReason      = "clear";
+
+//--- Strategy F state
+struct FibSym
+  {
+   string   sym;
+   datetime day;            // server day the cached setup belongs to
+   double   pdh, pdl;       // previous-day high/low
+   double   rHi, rLo;       // morning range [FibRangeStartH, FibRangeEndH)
+   bool     setup;          // range computed for today
+   int      traded;         // entries taken today
+   string   gvKey;          // per-symbol dedupe GV
+  };
+FibSym   g_fibs[];
+bool     g_fibActive    = false;
 bool     g_newsAvail      = false;  // calendar query succeeded
 string   g_newsReason     = "not checked";
 datetime g_newsCheckedAt  = 0;
@@ -635,8 +664,9 @@ bool CalcVolume(const string sym, double entry, double sl, double &vol)
 
    if(RiskPercent <= 0.0)
      {
-      double fl = (g_goldActive && sym == g_goldSymbol && FixedLotGold > 0)
-                  ? FixedLotGold : FixedLot;
+      double fl = FixedLot;
+      if(g_fibActive && FibFixedLot > 0) fl = FibFixedLot;
+      else if(g_goldActive && sym == g_goldSymbol && FixedLotGold > 0) fl = FixedLotGold;
       if(EquityPerLotStep > 0.0)
         {
          double eq = AccountInfoDouble(ACCOUNT_EQUITY);
@@ -898,6 +928,29 @@ void NewsUpdate()
                               ticket, trade.ResultRetcode(),
                               trade.ResultRetcodeDescription()));
         }
+     }
+  }
+
+void ParseFibSymbols()
+  {
+   string parts[];
+   int n = StringSplit(FibSymbols, StringGetCharacter(",", 0), parts);
+   for(int i = 0; i < n; i++)
+     {
+      StringTrimLeft(parts[i]); StringTrimRight(parts[i]);
+      if(parts[i] == "") continue;
+      string sym = parts[i];
+      if(!SymbolSelect(sym, true) && !(SymbolSelect(sym + ".0", true) && (sym += ".0") != ""))
+        { Print("INIT: fib symbol '" + parts[i] + "' unavailable - skipped."); continue; }
+      int idx = ArraySize(g_fibs);
+      ArrayResize(g_fibs, idx + 1);
+      g_fibs[idx].sym    = sym;
+      g_fibs[idx].day    = 0;
+      g_fibs[idx].setup  = false;
+      g_fibs[idx].traded = 0;
+      g_fibs[idx].gvKey  = StringFormat("GRD_%I64d_SF_%s", g_login, sym);
+      if(GlobalVariableCheck(g_fibs[idx].gvKey))
+         g_fibs[idx].traded = (int)GlobalVariableGet(g_fibs[idx].gvKey);
      }
   }
 
@@ -1372,7 +1425,8 @@ bool MoneyStops(const string sym, bool isBuy, double &sl, double &tp)
    double tv = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_VALUE);
    double ts = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_SIZE);
    double px = SymbolInfoDouble(sym, isBuy ? SYMBOL_BID : SYMBOL_ASK);
-   double lot = (g_goldActive && sym == g_goldSymbol && FixedLotGold > 0)
+   double lot = (g_fibActive && FibFixedLot > 0) ? FibFixedLot :
+                (g_goldActive && sym == g_goldSymbol && FixedLotGold > 0)
                 ? FixedLotGold : FixedLot;
    if(tv <= 0 || ts <= 0 || px <= 0) return false;
    double dist = riskUSD * ts / (tv * lot);
@@ -1911,6 +1965,111 @@ void StrategyGoldSweep()
   }
 
 //+------------------------------------------------------------------+
+//| STRATEGY F - prev-day H/L fib retracement (multi-symbol)         |
+//| Buy:  03-09 range high > PDH; fib high->PDL; enter 0.382-0.5     |
+//| Sell: 03-09 range low  < PDL; fib low ->PDH; enter 0.5-0.618     |
+//+------------------------------------------------------------------+
+bool FibDaySetup(FibSym &f, const datetime now)
+  {
+   datetime d0 = DayStart(now);
+   if(f.day == d0 && f.setup) return true;
+   MqlDateTime dt; TimeToStruct(now, dt);
+   if(dt.hour < FibRangeEndH) return false;             // range still forming
+
+   //--- previous-day high/low
+   MqlRates d[]; ArraySetAsSeries(d, true);
+   if(CopyRates(f.sym, PERIOD_D1, 1, 1, d) < 1)
+     { SetBlockReason("strategy F: D1 data missing on " + f.sym); return false; }
+   f.pdh = d[0].high; f.pdl = d[0].low;
+
+   //--- morning range on FibTF
+   MqlRates r[];
+   int n = CopyRates(f.sym, FibTF, d0 + FibRangeStartH * 3600,
+                     d0 + FibRangeEndH * 3600 - 1, r);
+   if(n <= 0)
+     { SetBlockReason("strategy F: range data missing on " + f.sym); return false; }
+   f.rHi = r[0].high; f.rLo = r[0].low;
+   for(int i = 1; i < n; i++) { f.rHi = MathMax(f.rHi, r[i].high); f.rLo = MathMin(f.rLo, r[i].low); }
+
+   f.day = d0; f.setup = true;
+   if(GlobalVariableCheck(f.gvKey)) f.traded = (int)GlobalVariableGet(f.gvKey);
+   else f.traded = 0;
+   return true;
+  }
+
+void StrategyFibDay()
+  {
+   datetime now = ServerTime();
+   MqlDateTime dt; TimeToStruct(now, dt);
+   if(dt.hour < FibRangeEndH || dt.hour >= FibEntryEndH)
+     { SetBlockReason("strategy F: outside entry window"); return; }
+
+   for(int i = 0; i < ArraySize(g_fibs); i++)
+     {
+      if(!FibDaySetup(g_fibs[i], now)) continue;
+      if(FibMaxTradesDay > 0 && g_fibs[i].traded >= FibMaxTradesDay) continue;
+      if(ManagedPositionExists(g_fibs[i].sym) || !EntryOKForSymbol(g_fibs[i].sym)) continue;
+
+      double ask = SymbolInfoDouble(g_fibs[i].sym, SYMBOL_ASK);
+      double bid = SymbolInfoDouble(g_fibs[i].sym, SYMBOL_BID);
+      if(ask <= 0 || bid <= 0) continue;
+      double pt  = SymPoint(g_fibs[i].sym);
+      int    dg  = SymDigits(g_fibs[i].sym);
+
+      //--- direction for the day: whichever side got swept first/only.
+      //    Broke PDH -> buy day (sells banned); broke PDL -> sell day (buys banned);
+      //    swept both sides -> ambiguous, no trades.
+      bool sweptHi = (g_fibs[i].rHi > g_fibs[i].pdh);
+      bool sweptLo = (g_fibs[i].rLo < g_fibs[i].pdl);
+      bool buyOK  = FibRequireSweep ? (sweptHi && !sweptLo) : !sweptLo;
+      bool sellOK = FibRequireSweep ? (sweptLo && !sweptHi) : !sweptHi;
+
+      //--- BUY: range swept above PDH; fib 0=PDL, 1=rHi; zone = PDL + [Lo,Hi]*R
+      if(AllowBuys && buyOK && g_fibs[i].rHi > g_fibs[i].pdl)
+        {
+         double R      = g_fibs[i].rHi - g_fibs[i].pdl;
+         double zTop   = g_fibs[i].pdl + FibZoneHi * R;
+         double zBot   = g_fibs[i].pdl + FibZoneLo * R;
+         double target = g_fibs[i].pdl + FibTPExt  * R;
+         if(ask >= zBot && ask <= zTop && target > ask)
+           {
+            double sl = (FibSLMode == 0 ? g_fibs[i].pdl : zBot) - SLBufferPoints * pt;
+            string ctx = StringFormat("pdh=%.*f;pdl=%.*f;rhi=%.*f;zone=%.*f-%.*f",
+                           dg, g_fibs[i].pdh, dg, g_fibs[i].pdl, dg, g_fibs[i].rHi,
+                           dg, zBot, dg, zTop);
+            if(TryEnter(g_fibs[i].sym, true, sl, "GB_F_BUY", target, 0, ctx))
+              {
+               g_fibs[i].traded++;
+               GlobalVariableSet(g_fibs[i].gvKey, (double)g_fibs[i].traded);
+               SetBlockReason("strategy F: BUY " + g_fibs[i].sym + " in fib zone");
+              }
+           }
+        }
+      //--- SELL: range swept below PDL; fib 0=PDH, 1=rLo; zone = PDH - [Lo,Hi]*R
+      if(AllowSells && sellOK && g_fibs[i].rLo < g_fibs[i].pdh)
+        {
+         double R      = g_fibs[i].pdh - g_fibs[i].rLo;
+         double zTop   = g_fibs[i].pdh - FibZoneLo * R;
+         double zBot   = g_fibs[i].pdh - FibZoneHi * R;
+         double target = g_fibs[i].pdh - FibTPExt  * R;
+         if(bid >= zBot && bid <= zTop && target < bid)
+           {
+            double sl = (FibSLMode == 0 ? g_fibs[i].pdh : zTop) + SLBufferPoints * pt;
+            string ctx = StringFormat("pdh=%.*f;pdl=%.*f;rlo=%.*f;zone=%.*f-%.*f",
+                           dg, g_fibs[i].pdh, dg, g_fibs[i].pdl, dg, g_fibs[i].rLo,
+                           dg, zBot, dg, zTop);
+            if(TryEnter(g_fibs[i].sym, false, sl, "GB_F_SELL", target, SellRiskReward, ctx))
+              {
+               g_fibs[i].traded++;
+               GlobalVariableSet(g_fibs[i].gvKey, (double)g_fibs[i].traded);
+               SetBlockReason("strategy F: SELL " + g_fibs[i].sym + " in fib zone");
+              }
+           }
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
 //| STRATEGY B - session liquidity sweep & reclaim                   |
 //+------------------------------------------------------------------+
 //| Returns the most recent COMPLETED window [startH,endH) in server |
@@ -2069,7 +2228,8 @@ void DrawStatus()
                  (StrategyMode == PULLBACK) ? "PULLBACK" :
                  (StrategyMode == STRUCTURE) ? "STRUCTURE" :
                  (StrategyMode == PULLBACK_GOLD) ? "PULLBACK+GOLD" :
-                 (StrategyMode == GOLD_STRUCT) ? "GOLD_STRUCT" : "BOTH";
+                 (StrategyMode == GOLD_STRUCT) ? "GOLD_STRUCT" :
+                 (StrategyMode == FIB_PD) ? "FIB_PD" : "BOTH";
    Comment(StringFormat(
       "GuardianBot v1.00 | mode=%s\n"
       "Trend: %s %s %s | Gold: %s %s %s\n"
@@ -2143,7 +2303,11 @@ int OnInit()
       GSSwingStr < 1 || GoldLonStartH < 0 || GoldLonEndH < 0 || GoldLonStartH > 24 ||
       GoldLonEndH > 24 || GoldNYStartH < 0 || GoldNYEndH < 0 || GoldNYStartH > 24 ||
       GoldNYEndH > 24 || MaxSessionAttempts < 0 ||
-      VolSpikeMult <= 0 || VolSpikeLookback < 5 || VolSpikeCooldown < 0)
+      VolSpikeMult <= 0 || VolSpikeLookback < 5 || VolSpikeCooldown < 0 ||
+      FibRangeStartH < 0 || FibRangeEndH < 0 || FibRangeStartH >= FibRangeEndH ||
+      FibRangeEndH > 24 || FibEntryEndH > 24 || FibEntryEndH <= 0 ||
+      FibZoneLo <= 0 || FibZoneHi <= FibZoneLo || FibTPExt <= 1.0 ||
+      FibSLMode < 0 || FibSLMode > 1 || FibMaxTradesDay < 0)
      { Print("INIT FAIL: negative/invalid numeric input."); return INIT_PARAMETERS_INCORRECT; }
    if(BuyConfirmCandles < 1 || SellConfirmCandles < 1)
      { Print("INIT FAIL: confirmation candles must be >= 1."); return INIT_PARAMETERS_INCORRECT; }
@@ -2168,6 +2332,8 @@ int OnInit()
                     StrategyMode == PULLBACK_GOLD);
    g_goldActive  = (StrategyMode == SESSION_SWEEP || StrategyMode == BOTH ||
                     StrategyMode == PULLBACK_GOLD || StrategyMode == GOLD_STRUCT);
+   g_fibActive   = (StrategyMode == FIB_PD);
+   if(g_fibActive) ParseFibSymbols();
 
    if(g_trendActive && !SymbolSelect(g_trendSymbol, true) &&
       !(SymbolSelect(g_trendSymbol + ".0", true) && (g_trendSymbol += ".0") != ""))
@@ -2175,7 +2341,7 @@ int OnInit()
    if(g_goldActive && !SymbolSelect(g_goldSymbol, true) &&
       !(SymbolSelect(g_goldSymbol + ".0", true) && (g_goldSymbol += ".0") != ""))
      { Print("INIT: gold symbol '" + g_goldSymbol + "' unavailable - Strategy B/E disabled."); g_goldActive = false; }
-   if(!g_trendActive && !g_goldActive)
+   if(!g_trendActive && !g_goldActive && !g_fibActive)
      { Print("INIT FAIL: no strategy leg could be enabled."); return INIT_FAILED; }
 
    //--- optional EMA trend filter for Strategy A
@@ -2205,13 +2371,16 @@ int OnInit()
          (UseADXFilter && g_adx == INVALID_HANDLE))
         { Print("INIT: pullback EMA handles failed on " + g_trendSymbol + " - Strategy C disabled."); g_trendActive = false; }
      }
-   if(!g_trendActive && !g_goldActive)
+   if(!g_trendActive && !g_goldActive && !g_fibActive)
      { Print("INIT FAIL: no strategy leg could be enabled."); return INIT_FAILED; }
+   if(g_fibActive && ArraySize(g_fibs) == 0)
+     { Print("INIT FAIL: FIB_PD mode but no usable FibSymbols."); return INIT_FAILED; }
 
    //--- trade object
    trade.SetExpertMagicNumber(Magic);
    trade.SetDeviationInPoints(DEVIATION_POINTS);
-   trade.SetTypeFillingBySymbol(g_trendActive ? g_trendSymbol : g_goldSymbol);
+   trade.SetTypeFillingBySymbol(g_trendActive ? g_trendSymbol :
+                                (g_goldActive ? g_goldSymbol : g_fibs[0].sym));
    trade.SetAsyncMode(false);
 
    ParseNewsCurrencies();
@@ -2459,6 +2628,7 @@ void RunLegs()
         }
       else if(IsNewBar(g_goldSymbol, GoldTF, g_lastGoldBar)) StrategyB();
      }
+   if(g_fibActive) StrategyFibDay();   // touch-based; setup cached per day
   }
 
 void OnTick()

@@ -410,6 +410,21 @@ The M5/2.0x gate filtered one news-wick entry and improved PF + DD
 slightly — free protection with no edge cost. Default set to
 2.0x / cooldown 6.
 
+### Strategy F: prev-day H/L fib retracement (2026.10.28) — REJECTED
+
+Mode `FIB_PD` (7): prev-day high/low + 03-09 server-time range sweep;
+sweep PDH -> buy day, sweep PDL -> sell day (both = ambiguous, none).
+Fib from range extreme to opposite PD level; touch entry in the
+0.382-0.5 zone; SL beyond PD level; TP 1.618. Multi-symbol via
+`FibSymbols`, per-symbol `FibFixedLot`, per-day GV dedupe.
+
+Backtest ($150, full year): **1 trade on XAUUSD (-$12.20), 1 trade on
+EURUSD (-$3.27)** — the combined filters (sweep required + direction
+exclusion + narrow zone + window) starve the signal. Built and kept as
+an optional mode, but rejected as a live strategy. Possible cause also
+suspected: chart markers are SAST while windows are server-time —
+misaligned hours would measure the wrong range entirely.
+
 ## Strategy B on gold — R1000 (~$55) account, year sim
 
 `XAUUSD.0` M15, `FixedLot=0.01`, `MoneySL_USD=5.5`/`MoneyTP_USD=5.5`
