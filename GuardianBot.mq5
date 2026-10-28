@@ -147,6 +147,13 @@ input int    NewsMinsBefore      = 30;      // Block window before event (min)
 input int    NewsMinsAfter       = 30;      // Block window after event (min)
 input bool   CloseBeforeNews     = false;   // Close EA gold positions in window
 input string NewsCurrencies      = "USD";   // Comma-separated currencies to watch
+input bool   NewsFailOpen        = false;   // If calendar unavailable, allow entries anyway (warning)
+
+input group "=== Volatility shock gate (unscheduled news proxy, gold only) ==="
+input bool   VolSpikeGate        = true;    // Block gold entries after abnormal range expansion
+input double VolSpikeMult        = 2.5;     // Spike = completed bar range > Mult x avg range
+input int    VolSpikeLookback    = 20;      // Entry-TF bars for the average range
+input int    VolSpikeCooldown    = 6;       // Block entries for this many entry-TF bars
 
 //+------------------------------------------------------------------+
 //| Constants / globals                                              |
@@ -209,6 +216,9 @@ string   g_gvSigGS    = "";         // last gold-struct SELL signal-candle time
 
 //--- news gate state
 bool     g_newsBlocked    = false;
+bool     g_volBlocked     = false;
+datetime g_spikeUntil     = 0;
+string   g_volReason      = "clear";
 bool     g_newsAvail      = false;  // calendar query succeeded
 string   g_newsReason     = "not checked";
 datetime g_newsCheckedAt  = 0;
@@ -765,6 +775,9 @@ bool TryEnter(const string sym, bool isBuy, double sl, string tag, double tpIn =
       if(g_newsBlocked)
         { SetBlockReason("news gate: " + g_newsReason); return false; }
      }
+   //--- volatility shock gate (gold only)
+   if(sym == g_goldSymbol && VolSpikeGate && g_volBlocked)
+     { SetBlockReason("vol spike: " + g_volReason); return false; }
    //--- quotes
    double ask = SymbolInfoDouble(sym, SYMBOL_ASK);
    double bid = SymbolInfoDouble(sym, SYMBOL_BID);
@@ -846,10 +859,20 @@ void NewsUpdate()
      }
    else if(anyFail && !anyOk)
      {
-      if(g_newsAvail || g_newsReason != "calendar query failed")
-         Print("News gate: calendar query failed - gold entries blocked (fail-closed).");
-      g_newsBlocked = true; g_newsAvail = false;
-      g_newsReason = "calendar query failed";
+      if(NewsFailOpen)
+        {
+         if(!g_newsAvail && g_newsReason != "calendar unavailable (fail-open)")
+            Print("News gate: calendar unavailable - gold entries ALLOWED (fail-open).");
+         g_newsBlocked = false; g_newsAvail = true;
+         g_newsReason = "calendar unavailable (fail-open)";
+        }
+      else
+        {
+         if(g_newsAvail || g_newsReason != "calendar query failed")
+            Print("News gate: calendar query failed - gold entries blocked (fail-closed).");
+         g_newsBlocked = true; g_newsAvail = false;
+         g_newsReason = "calendar query failed";
+        }
      }
    else
      {
@@ -2037,7 +2060,10 @@ void DrawStatus()
    string lock = (g_dailyLock || g_weeklyLock) ? "LOCKED - " + g_lockReason : "CLEAR";
    string news = !UseNewsFilterGold ? "disabled" :
                  !g_newsAvail       ? "UNAVAILABLE (gold blocked)" :
-                 g_newsBlocked      ? "BLOCKED: " + g_newsReason : "clear";
+                 g_newsBlocked      ? "BLOCKED: " + g_newsReason :
+                 (g_newsReason != "clear" ? g_newsReason : "clear");
+   string vol  = !VolSpikeGate ? "disabled" :
+                 g_volBlocked   ? "BLOCKED: " + g_volReason : "clear";
    string mode = (StrategyMode == TRENDBREAK) ? "TRENDBREAK" :
                  (StrategyMode == SESSION_SWEEP) ? "SESSION_SWEEP" :
                  (StrategyMode == PULLBACK) ? "PULLBACK" :
@@ -2052,6 +2078,7 @@ void DrawStatus()
       "Weekly P/L: %.2f %s (target %.2f)\n"
       "Guardian: %s\n"
       "News gate (gold): %s\n"
+      "Vol spike (gold): %s\n"
       "Last block: %s",
       mode,
       g_trendSymbol, EnumToString(TrendTF), g_trendActive ? "ON" : "OFF",
@@ -2059,7 +2086,7 @@ void DrawStatus()
       TimeToString(ServerTime()),
       g_dailyPL, g_currency, DailyProfitTarget, DailyMaxLoss,
       g_weeklyPL, g_currency, WeeklyProfitTarget,
-      lock, news, g_lastBlockReason));
+      lock, news, vol, g_lastBlockReason));
   }
 
 //+------------------------------------------------------------------+
@@ -2115,7 +2142,8 @@ int OnInit()
       RunnerTrailR < 0 || EquityPerLotStep < 0 || ADXPeriod < 1 || ADXMin < 0 ||
       GSSwingStr < 1 || GoldLonStartH < 0 || GoldLonEndH < 0 || GoldLonStartH > 24 ||
       GoldLonEndH > 24 || GoldNYStartH < 0 || GoldNYEndH < 0 || GoldNYStartH > 24 ||
-      GoldNYEndH > 24 || MaxSessionAttempts < 0)
+      GoldNYEndH > 24 || MaxSessionAttempts < 0 ||
+      VolSpikeMult <= 0 || VolSpikeLookback < 5 || VolSpikeCooldown < 0)
      { Print("INIT FAIL: negative/invalid numeric input."); return INIT_PARAMETERS_INCORRECT; }
    if(BuyConfirmCandles < 1 || SellConfirmCandles < 1)
      { Print("INIT FAIL: confirmation candles must be >= 1."); return INIT_PARAMETERS_INCORRECT; }
@@ -2359,12 +2387,57 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
   }
 
 //+------------------------------------------------------------------+
+//| Volatility shock gate: block gold entries after abnormal range   |
+//| expansion — real-time proxy for unscheduled geopolitical/news    |
+//| shocks that no calendar can predict.                             |
+//+------------------------------------------------------------------+
+void VolSpikeUpdate()
+  {
+   if(!g_goldActive || !VolSpikeGate) { g_volBlocked = false; return; }
+   datetime now = ServerTime();
+   int need = VolSpikeLookback + VolSpikeCooldown + 4;
+   static datetime checkedAt = 0;
+   if(now - checkedAt < 30) return;               // refresh every ~30s
+   checkedAt = now;
+   ENUM_TIMEFRAMES stf = (StrategyMode == GOLD_STRUCT) ? GoldEntryTF : GoldTF;
+   MqlRates r[]; ArraySetAsSeries(r, true);
+   if(CopyRates(g_goldSymbol, stf, 0, need, r) < need)
+     { g_volReason = "spike data unavailable"; return; }
+
+   double avg = 0;
+   for(int i = 2; i < 2 + VolSpikeLookback && i < ArraySize(r); i++)
+      avg += r[i].high - r[i].low;
+   avg /= VolSpikeLookback;
+   if(avg <= 0) return;
+
+   //--- a spike is any completed bar in the cooldown window exceeding the average
+   g_spikeUntil = 0;
+   for(int i = 1; i <= VolSpikeCooldown; i++)
+     {
+      double rng = r[i].high - r[i].low;
+      if(rng > VolSpikeMult * avg)
+        {
+         datetime until = r[i].time + (datetime)(VolSpikeCooldown * PeriodSeconds(stf));
+         if(until > g_spikeUntil) g_spikeUntil = until;
+         g_volReason = StringFormat("bar %s range %.0f > %.1fx avg %.0f",
+                                    TimeToString(r[i].time, TIME_MINUTES),
+                                    rng, VolSpikeMult, avg);
+        }
+     }
+   bool wasBlocked = g_volBlocked;
+   g_volBlocked = (now < g_spikeUntil);
+   if(g_volBlocked && !wasBlocked) Print("Vol spike gate: BLOCKED - " + g_volReason);
+   else if(!g_volBlocked && wasBlocked) Print("Vol spike gate: clear.");
+  }
+
+//+------------------------------------------------------------------+
 void Monitor()
   {
    GuardianUpdate();
    TrackUpdate();
    GuardianEnforce();
    NewsUpdate();
+   VolSpikeUpdate();
    ManageBreakeven();
    DrawStatus();
   }

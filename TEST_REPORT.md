@@ -383,6 +383,33 @@ Best known config: **loose gates + RR 3.0** — `MinPullbackPoints=0`,
   skipping late-run trades. Realistic deployment wants ≥$500+ or the
   DD is partly self-limiting anyway.
 
+### News / geopolitical-shock protection (2026.10.28)
+
+Two mechanisms now exist for gold risk events:
+
+1. **Calendar gate** (`UseNewsFilterGold`, existing): blocks ±30 min
+   around high-impact USD events via the MT5 economic calendar.
+   Limitation: Deriv's MT5 does not serve calendar data — the gate
+   stays PENDING forever (fail-closed = gold permanently blocked).
+   New input `NewsFailOpen` allows trading with a warning when the
+   calendar is unavailable.
+2. **Volatility-spike gate** (`VolSpikeGate`, new): real-time proxy for
+   unscheduled geopolitical/news shocks. Blocks gold entries when a
+   completed entry-TF bar's range exceeds `VolSpikeMult` × the
+   `VolSpikeLookback`-bar average, for `VolSpikeCooldown` bars.
+
+Backtest on the champion combo ($150):
+
+| Spike setting | Trades | PF | Net |
+|---|---|---|---|
+| Off | 28 | 3.41 | +$554.86 |
+| 2.5x / H1 | 28 | 3.41 | +$554.86 (never fired) |
+| **2.0x / M5, cooldown 6** | 27 | **3.58** | **+$566.03** |
+
+The M5/2.0x gate filtered one news-wick entry and improved PF + DD
+slightly — free protection with no edge cost. Default set to
+2.0x / cooldown 6.
+
 ## Strategy B on gold — R1000 (~$55) account, year sim
 
 `XAUUSD.0` M15, `FixedLot=0.01`, `MoneySL_USD=5.5`/`MoneyTP_USD=5.5`
