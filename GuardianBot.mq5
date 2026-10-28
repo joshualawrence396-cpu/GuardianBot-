@@ -931,6 +931,25 @@ void NewsUpdate()
      }
   }
 
+//--- resolve a user-supplied symbol to the broker's actual name:
+//    exact -> common suffixes -> prefix match against the symbol list
+bool ResolveSymbol(string &sym)
+  {
+   if(SymbolSelect(sym, true)) return true;
+   string suf[] = {".0",".pro",".ecn",".r",".i",".a",".x",".s",".m",".f",".b",
+                   "_pro"," pro",".cash",".fx",".st",".sb",".spot"};
+   for(int i = 0; i < ArraySize(suf); i++)
+      if(SymbolSelect(sym + suf[i], true)) { sym += suf[i]; return true; }
+   int total = SymbolsTotal(false);
+   for(int i = 0; i < total; i++)
+     {
+      string n = SymbolName(i, false);
+      if(StringFind(n, sym) == 0 && StringLen(n) - StringLen(sym) <= 5)
+        { if(SymbolSelect(n, true)) { sym = n; return true; } }
+     }
+   return false;
+  }
+
 void ParseFibSymbols()
   {
    string parts[];
@@ -940,7 +959,7 @@ void ParseFibSymbols()
       StringTrimLeft(parts[i]); StringTrimRight(parts[i]);
       if(parts[i] == "") continue;
       string sym = parts[i];
-      if(!SymbolSelect(sym, true) && !(SymbolSelect(sym + ".0", true) && (sym += ".0") != ""))
+      if(!ResolveSymbol(sym))
         { Print("INIT: fib symbol '" + parts[i] + "' unavailable - skipped."); continue; }
       int idx = ArraySize(g_fibs);
       ArrayResize(g_fibs, idx + 1);
@@ -2335,11 +2354,9 @@ int OnInit()
    g_fibActive   = (StrategyMode == FIB_PD);
    if(g_fibActive) ParseFibSymbols();
 
-   if(g_trendActive && !SymbolSelect(g_trendSymbol, true) &&
-      !(SymbolSelect(g_trendSymbol + ".0", true) && (g_trendSymbol += ".0") != ""))
+   if(g_trendActive && !ResolveSymbol(g_trendSymbol))
      { Print("INIT: trend symbol '" + g_trendSymbol + "' unavailable - trend leg disabled."); g_trendActive = false; }
-   if(g_goldActive && !SymbolSelect(g_goldSymbol, true) &&
-      !(SymbolSelect(g_goldSymbol + ".0", true) && (g_goldSymbol += ".0") != ""))
+   if(g_goldActive && !ResolveSymbol(g_goldSymbol))
      { Print("INIT: gold symbol '" + g_goldSymbol + "' unavailable - Strategy B/E disabled."); g_goldActive = false; }
    if(!g_trendActive && !g_goldActive && !g_fibActive)
      { Print("INIT FAIL: no strategy leg could be enabled."); return INIT_FAILED; }
